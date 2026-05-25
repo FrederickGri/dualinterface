@@ -1,0 +1,35 @@
+{
+  "projects": [
+    {
+      "id": "9017a2d07be8",
+      "name": "Migrated Conversation",
+      "pdf_filename": "",
+      "created_at": "2026-05-24T23:43:59.256490"
+    },
+    {
+      "id": "252631874e6f",
+      "name": "Conversation 2",
+      "pdf_filename": "",
+      "created_at": "2026-05-24T23:44:13.273457"
+    },
+    {
+      "id": "b5747b80f9d7",
+      "name": "Conversation 3",
+      "pdf_filename": "",
+      "created_at": "2026-05-24T23:45:03.878803"
+    },
+    {
+      "id": "e2e7af6c5ed8",
+      "name": "tb61965..10",
+      "pdf_filename": "tb61965..10.pdf",
+      "created_at": "2026-05-24T23:57:20.147768"
+    },
+    {
+      "id": "440087ad2f90",
+      "name": "tb61965..10",
+      "pdf_filename": "tb61965..10.pdf",
+      "created_at": "2026-05-25T00:19:02.725027"
+    }
+  ],
+  "active_project_id": "e2e7af6c5ed8"
+}

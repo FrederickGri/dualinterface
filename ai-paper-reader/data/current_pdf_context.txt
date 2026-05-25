@@ -1,0 +1,959 @@
+[Page 1]
+Nature Computational Science
+nature computational sciencehttps://doi.org/10.1038/s43588-026-00970-6
+Article
+Feature-preserving manifold approximation 
+and projection to analyze single-cell data
+ 
+Yang Yang    1,2,7 , Jialei Gong1,7, Hongjian Sun1,2, Amos Choo3, 
+Jessica Cara Mar4, Yunbo Wei    2,5, Yu Zhang2,5, Wenjie Zhang    6, Minglei Shu2, 
+Zewen Kelvin Tuong    3  & Di Yu    1,3 
+Visualizing single-cell data supports understanding cellular heterogeneity 
+and dynamics. Uniform manifold approximation and projection (UMAP) 
+and t-distributed stochastic neighbor embedding (t-SNE) reveal clustering 
+structures but often fail to preserve underlying gene-level information. Here 
+we introduce FeatureMAP (feature-preserving manifold approximation 
+and projection), a framework that enhances manifold learning through 
+pairwise tangent space embedding. By integrating UMAP with principal 
+component analysis, FeatureMAP retains clustering structures and feature 
+variation in a low-dimensional representation. It presents three key analytic 
+concepts: gene contribution, gene variation trajectory, and core versus 
+transition states. Gene contribution and gene variation trajectory are 
+derived by estimating and projecting feature loadings or variation, whereas 
+core and transition states are computationally defined using FeatureMAP’s 
+topological properties, including density, curvature and betweenness 
+centrality. These concepts enable differential gene variation (DGV) analysis 
+that highlights regulatory genes driving transitions between cell states. 
+Demonstrated on synthetic and real single-cell RNA sequencing data from 
+pancreatic development and T cell exhaustion, FeatureMAP improves 
+analyses of trajectories and crucial regulatory genes.
+In single-cell data analysis, researchers rely on the intricate task of creat -
+ing visual representations capable of capturing the diverse character -
+istics of high-dimensional data. As this field has progressed, a plethora 
+of dimensionality reduction methodologies have been introduced1–10. 
+Notably, uniform manifold approximation and projection (UMAP)3 and 
+t-distributed stochastic neighbor embedding (t-SNE)1,2 have become 
+particularly prominent due to their exceptional ability to reveal 
+clustering structures in single-cell data; potential of heat diffusion 
+for affinity-based transition embedding (PHATE)6 further enhances visualization by capturing both local and global nonlinear structure. 
+However, the reliability and interpretability of these visualizations 
+remain debatable11. These methods are inherently limited in their ability 
+to effectively incorporate source features, such as gene-centric details, 
+into their visualizations3. Such constraints present crucial challenges 
+for researchers in interpreting single-cell data visualization to achieve 
+a deep understanding of cellular dynamics and biological mechanisms.
+UMAP and similar dimensionality reduction techniques tend to 
+lose source feature information primarily owing to their nonlinearity Received: 3 April 2025
+Accepted: 17 February 2026
+Published online: xx xx xxxx
+ Check for updates
+1Frazer Institute, Faculty of Health, Medicine and Behavioural Sciences, The University of Queensland, Brisbane, Queensland, Australia. 2Qilu University 
+of Technology (Shandong Academy of Sciences), Jinan, China. 3Ian Frazer Centre for Children’s Immunotherapy Research, Child Health Research 
+Centre, Faculty of Health, Medicine and Behavioural Sciences, The University of Queensland, Brisbane, Queensland, Australia. 4Australian Institute for 
+Bioengineering and Nanotechnology, The University of Queensland, Brisbane, Queensland, Australia. 5Laboratory of Immunology for Environment and 
+Health, Shandong Analysis and Test Center, Qilu University of Technology (Shandong Academy of Sciences), Jinan, China. 6School of Computer Science 
+and Engineering, The University of New South Wales, Sydney, New South Wales, Australia. 7These authors contributed equally: Yang Yang, Jialei Gong. 
+ e-mail: yang.yang1@uq.edu.au; z.tuong@uq.edu.au; di.yu@uq.edu.au
+
+[Page 2]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6To visualize feature variation, tangent spaces are embedded into 
+a two-dimensional frame by preserving pairwise angular alignment 
+(Extended Data Fig. 1a). These frames, guided by anisotropic radii 
+from local SVD, define projections that generate the gene expression 
+(GEX) embedding (Fig. 1a), which preserves local density and feature 
+loadings. Across the manifold, principal directions define a vector field 
+encoding local feature variation (Definition 1 ). FeatureMAP projects 
+this field to form the gene variation (GVA) embedding, which clusters 
+cells by shared directional changes, thereby complementing GEX by 
+highlighting variation-driven trajectories.
+Key concepts of FeatureMAP
+We introduce three key concepts to illustrate the effectiveness and 
+applications of FeatureMAP in single-cell data analysis: (1) gene contri -
+bution, (2) gene variation trajectory, and (3) core and transition states.
+The first concept, gene contribution, corresponds to feature 
+(gene) variation derived from our feature-preserving method (Fig. 1a,c ). 
+To formulate ‘gene contribution’ , we explicitly distinguish three related 
+but conceptually distinct quantities. ‘Gene expression’ defines a cell’s 
+position in the transcriptional state space; ‘expression variability’ cap -
+tures isotropic dispersion around that position, describing how broadly 
+a gene’s expression varies across neighboring cells without reference 
+to direction; and ‘feature variation’ measures anisotropic, directional 
+change aligned with local differentiation trajectories, reflecting how 
+a gene’s expression evolves as cells transition between states. To put 
+it simply, expression corresponds to position, variability to spread, 
+and feature variation to directional rate of change along the trajectory 
+(akin to ‘velocity’). Consequently, while variance-based approaches 
+identify genes that differ between states, ‘gene contribution’ addition -
+ally identifies genes whose directional changes precede and drive state 
+transitions, revealing regulatory signals that are unavailable from 
+expression- or variance-based analyses.
+The second concept, gene variation trajectory, is obtained by pro -
+jecting the variation vector field to form the GVA embedding (Fig. 1c ). 
+This embedding groups cells with similar directional patterns of 
+change, revealing fine-scale cellular trajectories. These trajectories 
+are consistent with density-based paths identified on the manifold 
+via ridge estimation (Extended Data Fig. 2a and ‘Gene variation trajec -
+tory’ in Methods). By linking directional gene variation with cell-state 
+progression, this concept is particularly effective for identifying genes 
+that drive transitions between cellular states, as demonstrated in the 
+subsequent case studies.
+To identify structured and biologically meaningful cell states, 
+FeatureMAP quantifies each cell’s local topology using three metrics: 
+density, curvature and betweenness centrality (Extended Data Fig. 1b). 
+Density captures local compactness by measuring how closely cells are 
+packed, serving as a proxy for state stability. Curvature, computed via 
+local gradients of tangent vectors, indicates structural bending: high 
+curvature highlights unstable, transitional areas, while low curvature 
+marks geometrically smooth, stable regions. Betweenness centrality 
+identifies cells acting as intermediaries in the manifold’s graph struc-
+ture, quantifying the extent to which a cell bridges trajectories between 
+clusters. Together, these measures support a principled classification 
+of cells into core states (high density, low curvature, low centrality) and 
+transition states (low density, high curvature, high centrality).
+The third core concept leverages these topological features to 
+define core and transition states in both the expression and variation 
+embeddings (Fig. 1c, Extended Data Fig. 1b and ‘Core states and tran-
+sition states calculation’ in Methods). In the GVA embedding, these 
+states manifest as knot-and-thread patterns, with knots marking stable 
+cores and threads tracing dynamic transitions. FeatureMAP labels cells 
+as core and transition states by applying quantile thresholds to each 
+metric to achieve consensus and refines clusters of core and transition 
+states using Leiden clustering16. Compared with UMAP and PHATE, 
+FeatureMAP yields clearer separation and improved state resolution, in preserving the topological structure. These methods fall under 
+manifold learning, which assumes that high-dimensional observation 
+data originate from a markedly lower-dimensional space. Initially, they 
+represent this high-dimensional manifold using a nonlinear topo -
+logical structure known as a simplicial complex, often implemented 
+as a k -nearest-neighbor (k NN) graph. They subsequently preserve 
+the distances between neighboring points to compute the embed -
+ding. Consequently, the sole topological property retained during 
+this nonlinear dimensionality reduction is the distance metric, while 
+the feature information becomes implicitly encoded in the distance 
+calculations between high-dimensional data points and is lost in the 
+embedding space.
+Recognizing the need for an improved visualization method in 
+single-cell data analysis, we introduce FeatureMAP, which stands for 
+feature-preserving manifold approximation and projection, to enable 
+the preservation of source features as well as topological structure. 
+Specifically, FeatureMAP’s innovation lies in its ability to use the princi -
+pal directions of local principal component analysis (PCA) to determine 
+the tangent spaces for feature loadings, while maintaining the k NN 
+graph12 to approximate the manifold. The resulting visualization of 
+FeatureMAP effectively captures clustering structures of the data as 
+well as distinct feature-specific insights, providing a more interpretable 
+representation of the single-cell data.
+These implementations of FeatureMAP allow us to introduce 
+three key concepts for single-cell analysis: gene contribution, gene 
+variation trajectory, and core and transition states. Gene contribution 
+and gene variation trajectory are derived by estimating and projecting 
+gene variation, while core and transition states are identified based on 
+topological properties, including density, curvature and betweenness 
+centrality. These concepts are further extended to differential gene var -
+iation (DGV) analysis, which contrasts cell clusters of transition versus 
+core states to identify regulatory genes that play important roles during 
+cell-state transitions. We demonstrate the utility of FeatureMAP across 
+diverse synthetic and real single-cell RNA sequencing data (scRNA-seq) 
+datasets, highlighting the importance of preserving feature-level infor -
+mation during dimensionality reduction. This enhances the interpret -
+ability of single-cell transcriptomic data and supports deeper insights 
+into cellular dynamics and regulatory mechanisms.
+Results
+Overview of FeatureMAP
+FeatureMAP is designed to retain both source features and clustering 
+structures within a reduced-dimensional space (Fig. 1  and ‘Framework 
+overview’ in Methods). While linear methods such as PCA13 jointly cap -
+ture data points and feature loadings via biplots14, this interpretability 
+can extend to nonlinear manifolds by equipping them with locally 
+linear PCA. In this framework, tangent spaces estimated from local 
+neighborhoods span the underlying geometry, aligning with princi -
+ples from differential geometry15. FeatureMAP constructs a k NN graph 
+and estimates local tangent spaces via PCA, where local singular value 
+decomposition (SVD) identifies dominant directions to define tangent 
+bases and capture both feature loadings and anisotropic radii (Fig. 1a,b ).
+Based on these tangent spaces, we formally define feature variation 
+to quantify the contribution of each feature within the local geometry:
+Definition 1 (feature variation).  The feature variation for d-dimensional 
+tangent space Txℳ around a data point x on manifold ℳ is given by
+∥fi∥=(d
+∑
+l=1|vli|2)1
+2
+,i=1,…,n, (1)
+where vli is the l th component of the i th feature loading in the local 
+principal direction VT. This l2- norm measures the local influence of 
+feature i, capturing directional variation along the manifold.
+
+[Page 3]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6
+For each point i
+kNNs
+211
+Feature 
+loadingsAnisotropic 
+kNNs
+Tangent 
+space
+Feature variationa
+bc
+(1)Preserve
+PreservekNN graph
+Tangent spaces
+(vector field)
+n dimensions
+Variation embedding (GVA)ij
+⟨vif,vjf⟩n dimensionsAnisotropic
+kNNs
+n dimensionsGoal: 
+Feature-preserving 
+embedding
+SVDTangent space approximation
+FeatureMAP GEXGene contribution
+Gene 1
+Gene 2
+Transition and core states
+FeatureMAP GVACore state
+Transition state(3) (2)Gene variation trajectory
+01
+FeatureMAP GVA
+FeatureMAP GEX embedding
+Cellular density
+Indication of 
+cluster numbersSingle-cell data
+Identification of 
+core and transition statesVisualization of 
+gene dynamics
+DGV analysis 
+Core /uni2192 transition Transition /uni2192 core
+Gene contribution to cellular dynamicsFeatureMAP GVA embedding
+Gene variation
+Temporal features Significance ranking dExpression embedding (GEX)x1x2x3
+x4
+x4x2x4x2x3
+x1x3
+x1x4x3
+x2 x1
+x1x2 x4x3f1
+f1
+xi
+xixi
+xixi
+xiv2
+v1v4
+v3v2f1
+f1 ||f1||
+||f2||
+||f3||
+||f4||
+ = [||f1||, ||f2||, ||f3||, ||f4||]f2f3f4f2f4f3
+v1
+v3f2f4f3f2
+f4f3v2
+v1
+xi
+M4
+354235
+M42351
+=x1 – xi
+x2 – xi
+x3 – xi
+x4 – xi
+x5 – xiv1T
+v2T
+v3T
+v4Tvifσ4σ3σ2σ1θ
+σ2σ1
+Xi = UΣVT
+Fig. 1 | Overview of FeatureMAP . a, The framework of FeatureMAP. With 
+high-dimensional data (left) as input, FeatureMAP constructs a manifold 
+approximation via a k NN graph (top middle), then computes tangent spaces as a 
+vector field (bottom middle) encoding source features and local anisotropic 
+radii. For the GEX embedding (top right; shading indicates density), FeatureMAP 
+embeds tangent spaces to define local bases for gene contributions while 
+preserving anisotropic structures. For the GVA embedding (bottom right),  
+it projects the tangent vector field to preserve alignment of feature variation 
+trajectories. b, Local structure construction on manifold ℳ by k NNs and tangent 
+space. For each data point, a k NN graph is built by connecting the data point with 
+its kNNs; the tangent space is estimated as the principal directions by applying 
+SVD to centered nearest neighbors, where U  is the matrix of left singular vectors. 
+These principal directions enable the feature loadings, which are further 
+encoded by feature variation as a vector of feature norms (bottom right). The 
+largest singular values corresponding to different principal directions augment the kNNs with anisotropic radii (top right). c , Enhanced data visualization with 
+FeatureMAP. FeatureMAP improves data visualization by incorporating feature 
+projection, transition states and core states. (1) FeatureMAP enables feature 
+projection within the low-dimensional embedding, where two different genes 
+(represented in dark and light red) are mapped to the embedding space, 
+highlighting their spatial distribution; shading indicates density. (2) FeatureMAP 
+GVA embedding shows gene variation trajectories colored by pseudotime; the 
+color bar indicates pseudotime values. (3) The FeatureMAP GVA embedding 
+effectively visualizes core and transition states using a distinctive thread-and-
+knot pattern. d , FeatureMAP workflow for the analysis of single-cell 
+transcriptomics. FeatureMAP constructs GEX and GVA embeddings to capture 
+cellular density and gene variation, enabling identification of clusters, core and 
+transition states, and gene dynamics. DGV analysis reveals potential regulators 
+by comparing core and transition states, highlighting temporal features and 
+ranking gene contributions to cellular transitions.
+
+[Page 4]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6as evidenced by higher clustering coefficients and silhouette scores 
+(Supplementary Figs. 1–4 and Extended Data Fig. 3).
+Building on the three central concepts, we introduce DGV analysis 
+to compare consecutive transition and core states and identify genes 
+with significant variation (Fig. 1d). DGV quantifies gene-level variation 
+between dynamic (transition) and stable (core) states, highlighting 
+genes with elevated variability along transition paths—potential regu -
+lators of cell differentiation. FeatureMAP jointly embeds cell density 
+and gene variation from transcriptomic profiles, producing GEX and 
+GVA embeddings for cluster detection and trajectory inference. This 
+integrated workflow reveals fine-grained structure, uncovers devel -
+opmental trajectories and identifies key regulatory genes, providing 
+a robust framework for dynamic single-cell analysis.
+FeatureMAP reveals the key regulator of a gene regulatory 
+network in synthetic data
+Using synthetic scRNA-seq data generated from a bifurcation model 
+defined by a known gene regulatory network (GRN; Fig. 2a and ‘Syn -
+thetic data generation’ in Methods), we demonstrate that FeatureMAP 
+reveals dynamic regulatory patterns with greater resolution than exist-
+ing methods. While both UMAP and FeatureMAP successfully recover 
+the bifurcation structure (Fig. 2b ), FeatureMAP provides additional 
+interpretability: the GEX embedding displays sparser branch inter -
+sections due to density preservation, and the GVA embedding deline-
+ates regulatory paths via gene variation trajectories. Figure 2 further 
+illustrates the rationale behind FeatureMAP’s dual-embedding design. 
+The GEX embedding maintains density by projecting cells along ani -
+sotropic radii derived from local singular values, which reflect how 
+tightly neighboring cells are packed in different directions. This enables 
+accurate detection of core states at density peaks (Fig. 2b–d ), but the 
+continuity of transitions becomes visually ambiguous, particularly near 
+bifurcations. In contrast, the GVA embedding preserves alignment of 
+principal directions across tangent spaces, enabling the recovery of 
+gene variation trajectories and revealing bifurcating paths with high 
+fidelity (Fig. 2b,d). Mathematically, these two properties are orthogonal 
+in the embedding space: density preservation depends on scalar radii 
+(singular values; Fig. 1b ), while trajectory preservation depends on 
+directional alignment (singular vectors; Fig. 1b), and both cannot be 
+simultaneously maintained in a two-dimensional projection. This inher -
+ent incompatibility motivates the dual-embedding strategy, in which 
+GEX and GVA separately encode density and trajectory information. 
+Rather than introducing unnecessary complexity, this separation is 
+essential for capturing both stable cell states and transitional dynam-
+ics within the same dataset.
+To assess density preservation, we compared the correlation 
+between local radii in original and embedded spaces across methods 
+(Fig. 2e and Extended Data Figs. 2b and 4). FeatureMAP GEX achieved 
+a high correlation (R2 = 0.660), matching densMAP, and outperformed 
+UMAP (R2 = 0.003). Density contour plots identified nine high-density peaks (Fig. 2c ), which aligned with clusters recovered via Leiden clus-
+tering16 (Fig. 2d), supporting FeatureMAP’s utility in guiding cluster 
+selection. In both GEX and GVA embeddings, we distinguished cells of 
+core and transition states (Fig. 2d). Core-state cells corresponded to 
+those at density peaks, while transition-state cells bridged them. In the 
+GVA embedding, these formed a knot-and-thread topology (Fig. 2d), 
+where core states appeared as stable clusters marked by gene signa -
+tures exhibiting lower variance than those identified in broader clusters 
+(Fig. 2f), and transition states connected adjacent cores.
+We next analyze one specific bifurcation branch identified through 
+gene variation trajectory (Fig. 2g), which exhibits six core-state clusters 
+along pseudotime. Both gene g4 and g6 show highest expression in the 
+post-bifurcation cores (clusters 4 to 6; Fig. 2h and Extended Data Fig. 2c), 
+marking them as candidate regulators. Conventional differential gene 
+expression (DGE) analysis between GEX clusters 1 (pre-bifurcation) and 
+2 (post-bifurcation) prioritized g6 due to its greater fold change and 
+lower P value (Fig. 2i and Extended Data Fig. 2d). In contrast, our DGV 
+analysis, comparing GVA-defined core-state cluster 1 and the adjacent 
+transition-state cluster 1, ranked g4 higher than g6 (Fig. 2j). Mapping 
+gene variation onto the potential landscape, defined as the negative 
+logarithm of local density17, further revealed a peak in both potential 
+and g4 variation between clusters 3 and 4 (Extended Data Fig. 2e), pin-
+pointing this region as a critical transition zone. Feature projection 
+confirms that the influence of g4 precedes the bifurcation, while g6 
+becomes active only downstream (Fig. 2k and Extended Data Fig. 2f). 
+These findings align with the ground-truth GRN (Fig. 2a), where g4 acts 
+as the primary regulator of this trajectory. This example illustrates 
+FeatureMAP’s capacity to reveal true regulatory drivers by integrat-
+ing variation-based ranking, transition-state topology and potential 
+landscape structure.
+FeatureMAP effectively reveals regulatory patterns in single-cell 
+data by quantifying gene contributions, tracing gene variation tra -
+jectories, and distinguishing core and transition states. The follow -
+ing studies further validate its advantages in analyzing real-world 
+single-cell datasets.
+FeatureMAP unveils the regulation underlying pancreatic 
+alpha- and beta-cell development
+To evaluate feature-preserving visualization in real single-cell data, 
+we applied FeatureMAP to an scRNA-seq dataset of mouse embryonic 
+pancreatic development at day 15.5 (E15.5). While previous work identi -
+fied GEX clusters and major trajectories toward alpha, beta, epsilon and 
+delta cells18, FeatureMAP offers a more precise depiction of develop -
+mental paths, exemplified by resolving the development of alpha- and 
+beta-cell lineages.
+We visualize the pancreatic dataset using cell type annotations 
+provided in the original study18 (Fig. 3a and Extended Data Fig. 5a). Com -
+pared with UMAP, FeatureMAP reveals clearer trajectory structures: the 
+GEX embedding displays a sparser layout at branching points, and the 
+Fig. 2 | FeatureMAP visualization reveals regulation patterns in synthetic data.  
+a, Synthetic bifurcation data (top, colored by pseudotime) simulated from a GRN 
+(bottom; blue arrows indicate activation and red arrows indicate repression). 
+b, Visualization of the synthetic data using UMAP and FeatureMAP, colored 
+by pseudotime. c , Contour plot of the FeatureMAP expression embedding 
+showing cell density, where shading indicates local density. d , Identification 
+of core and transition states by FeatureMAP. Gene expression clustering using 
+the Leiden algorithm is shown on the GEX and GVA embeddings (top row), with 
+corresponding core- and transition-state visualizations (middle and bottom 
+rows). e, FeatureMAP GEX preserves local density more accurately than UMAP.  
+R2 indicates correlation strength across all points. Colored dots denote divergent 
+intermediate branches ordered by pseudotime. f , Violin plot of gene variances 
+across clusters and corresponding core states. Each dot represents one gene 
+variance, yielding 63 values from 7 genes across 9 clusters or core states. 
+Statistical significance is assessed using a two-sided t -test (P  = 2.16 × 10−8).  The thick black bar denotes the interquartile range from the first (25th percentile) 
+to the third quartile (75th percentile). g , FeatureMAP GVA visualization of the 
+gene variation trajectory. One of the two divergent branches (colored orange) 
+is selected for downstream analysis (top). The same branch is shown in the GEX 
+embedding (bottom), highlighting the path across core and transition states.  
+h, Gene expression trends along the selected branch ordered by pseudotime. 
+The orange shading indicates overlap between core states and their corresponding 
+marker genes. i , DGE analysis in the divergent region along the selected branch, 
+showing two clusters in the GEX embedding (top) and genes differentially 
+expressed between cluster 2 and cluster 1 (bottom). j , Core and transition states 
+in the divergent region along the selected branch shown in the GVA embedding 
+(top), together with DGV analysis comparing transition state 1 and core state 1 
+(bottom). k, Gene contributions of g4 and g6 projected onto the GEX embedding. 
+Shading indicates local density, arrow direction represents gene change and 
+arrow length reflects gene variation.
+
+[Page 5]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6GVA embedding delineates cell-state transitions more distinctly. These 
+bifurcation regions, associated with varied fate decisions, are promi-
+nently resolved as gene variation trajectories. For instance, the two dif -
+ferentiation branches from the Fev+ progenitor cells to alpha and beta 
+lineages are clearly separated, highlighting lineage-specific differentia -
+tion and offering insights into pancreatic developmental pathways.We next evaluate density preservation in the GEX embedding, 
+where FeatureMAP surpasses UMAP (R2 = 0.09) and closely approxi-
+mates densMAP (R2 = 0.62 versus R2 = 0.54; Fig. 3b and Extended Data 
+Figs. 4 and 5b). The resulting density landscape outlines the devel -
+opmental topology, with high-density peaks marking core states. 
+Projecting the cells of core or transition states onto both embeddings 
+0 10–100102030
+0 10–200204025
+1 37
+4
+6Synthetic data
+GRN
+UMAP
+FeatureMAP GEX
+Original local 
+radius (log)Embedding local radius (log)
+–6–4–2–5–3–1R2 = 0.003
+–8–5–2
+0Cluster Core state
+Cluster Core
+stateVarianceF-test
+P < 0.001
+00.10.20.3Density
+Gene variation trajectoryUMAP FeatureMAP GEX FeatureMAP GVAPseudotime
+Gene contribution
+g4
+g6a b
+cd e
+fg
+k j
+Cluster 1
+Cluster 2One branch
+One branch
+Core and transition
+state FeatureMAP GEX FeatureMAP GVA
+Core and transition
+in one branch
+12
+3
+4
+65
+hGene expression trend
+Pseudotime12 3 456i
+RankingTransition 1 versus core 1Core 1GVA
+Transition 1
+Cluster 2 versus cluster 1
+RankingGEXScoreR2 = 0.494
+g1
+g2
+g3
+g4
+g5
+g6
+g7Core state Transition state
+DGV DGEg1g7g5g2g3g4g6
+g4
+g6g1g5g2
+g7g3
+
+[Page 6]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6
+GEX density GEX core-state cells cNgn3 low EP
+AlphaNgn3 high EP
+BetaFev+
+Delta Epsilon
+UMAP FeatureMAP GEX
+UMAP
+FeatureMAP GEX
+Original local 
+radius (log)Embedding local radius (log)
+345–5–3–1R2 = 0.091
+R2 = 0.391–5–3–1
+GVA core-state cells
+Core state
+Transition state87
+77
+65
+67
+67
+74
+65DGEs overlapGEX clusterCore statea b
+d
+f
+gGEX 
+clusterCore
+state00.20.4VarianceP < 0.01 e
+Fev+ /uni2192 Alpha
+Fev+ /uni2192 BetaGene variation trajectory
+Fev+ Fev+ 
+Gene variation trajectoryFeatureMAP GVA
+Leiden
+logFC variation–logFDRTransition
+(Alpha)Core 
+(Fev+)
+–2 0 201020
+logFC variation–logFDRTransition
+(Beta)Core 
+(Fev+)
+0 2.5 –2.50510
+Beta 2Alpha
+Beta 1ArxGene contribution
+ArxGene variation
+135
+Gene variation
+Pdx1 Pdx1 LeidenGene contributionArx
+Pdx1135
+Fig. 3 | FeatureMAP reveals progenitor and lineage genes during pancreatic 
+development. a, Visualization of pancreas data using UMAP and FeatureMAP. 
+Colors denote different cell types. Ngn3, Neurogenin 3; EP, endocrine progenitor. 
+b, Correlation between original and embedding local radii for UMAP and 
+FeatureMAP GEX. The R2 value of the Pearson correlation is shown in each plot.  
+c, Density contour plot of the FeatureMAP GEX embedding (left, shading 
+indicates local density), followed by visualization of core and transition states on 
+the GEX embedding (middle) and GVA embedding (right). d , Gene overlap of the 
+top-100 differentially expressed genes identified by cluster-based and core-state-
+based DGE analysis. e , Box plot showing variances of the top-100 differentially 
+expressed genes across GEX clusters and their corresponding core states. Statistical comparison is performed using a two-sided t -test (P  = 0.008); whiskers 
+represent 1 s.d. f , FeatureMAP identifies lineage genes along the trajectory from 
+Fev+ to alpha cells. The GVA embedding (left) displays the developmental path, 
+with core and transition states refined using Leiden clustering (inset). A volcano 
+plot shows the DGV analysis comparing transition versus core states (middle). 
+The identified lineage gene Arx is projected in the GVA embedding to show 
+its variation score and contribution (right); color bars denote gene variation. 
+g, FeatureMAP identifies lineage genes along the trajectory from Fev+ to beta 
+cells, as in f . The volcano plot highlights the gene Pdx1 , and its contribution and 
+variation are visualized in the GVA embedding (right).
+
+[Page 7]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6shows the core-state populations aligning with these peaks and the 
+transition-state populations linking them (Fig. 3c ). To assess biological 
+relevance, we compared marker genes of core-state populations with 
+their corresponding GEX clusters and confirmed over 65% overlap 
+(Fig. 3d and Supplementary Fig. 5). Gene variation in core-state popu -
+lations was lower than that in transition-state populations (Fig. 3e ), 
+supporting the former being stable and homogeneous.
+Focusing on the bifurcation from the Fev+ progenitor cells into 
+alpha and beta lineages, FeatureMAP GVA delineates distinct trajecto -
+ries and identifies transition-state cells (blue) emerging directly from 
+the Fev+ core-state cells (orange) (Fig. 3f,g). We performed the DGV anal -
+ysis between the Fev+ core-state cluster with respective transition-state 
+clusters and identified upregulated genes (logarithm of the fold change 
+(logFC) > 2, false discovery rate (FDR) <0.05): 15 for the alpha line -
+age; and 20 for the beta lineages (Fig. 3f,g, Supplementary Fig. 6 and 
+Supplementary Table 1). Well characterized for their roles respectively 
+in alpha- and beta-cell development19,20, the transcription factors Arx 
+and Pdx1  were identified by the DGV analysis as top-ranked regula -
+tors. Specifically, the yellow color of Arx in the GVA transition-state 
+cluster (blue) reflected the highest score of gene variation during the 
+transition from the core-state Fev+ cells toward the core-state alpha 
+cells, while its gene contribution spread throughout the whole Fev+ 
+to alpha developmental trajectory (Fig. 3f and Extended Data Fig. 5c). 
+Similarly, Pdx1  also shows the highest gene variation score in the GVA 
+transition-state cluster (blue) and a continuous gene contribution 
+along the beta developmental trajectory (Fig. 3g). In addition, many 
+other genes identified by the DGV analyses were also found with the 
+function in alpha- or beta-cell identity, insulin biosynthesis or protein 
+secretion (Supplementary Table 1).
+By integrating DGV analysis with core-transition states and gene 
+variation trajectories, FeatureMAP uncovers regulatory mechanisms in 
+pancreatic development. Unlike expression-focused methods, it visual -
+izes both gene variation and contribution, enhancing interpretation 
+of dynamic gene regulation during cell differentiation.
+FeatureMAP identifies the trajectory and regulation 
+underlying exhaustion CD8+ T cell differentiation in chronic 
+infection
+FeatureMAP was also applied to analyzing single-cell data for T cells, 
+which confront the challenge to define phenotypically and functionally 
+heterogeneous populations in various immune responses21. We applied 
+FeatureMAP to analyze a specific dataset of mouse CD8+ T cells from 
+three time points in a model of chronic viral infection by the lympho -
+cytic choriomeningitis virus (LCMV) clone 13 strain22 (Fig. 4), aiming 
+to characterize the regulatory mechanisms underlying distinct dif -
+ferentiation in T cell exhaustion.
+For this dataset, FeatureMAP outperforms UMAP in preserving 
+topological structure through density information and gene variation 
+trajectories (Fig. 4a,b and Extended Data Fig. 6a). The GEX embedding 
+highlights more variable states of proliferating cells (Prolif I and II 
+clusters), while the GVA embedding traces the differentiation trajec-
+tory from the effector-like population (the Eff-like cluster) through 
+the intermediate exhaustion (Exh-Int) population to separated killer cell lectin-like receptors (KLR)-expressing (Exh-KLR) or terminal-like 
+(Exh-Term) populations (Fig. 4b ). FeatureMAP identifies core-state cells 
+with shared marker genes but lower variability than their correspond -
+ing GEX clusters (Extended Data Fig. 6b). According to the visualization 
+of density information (the GEX embedding) and core-state cells (both 
+GEX and GVA embeddings), Exh-Int cells form the progenitors for the 
+bifurcation toward Exh-KLR or Exh-Term cells (Fig. 4c ). Notably, both 
+Exh-KLR and Exh-Term populations connect with the Gzma -expressing 
+exhaustion (Exh-TermGzma) population in the GVA embedding, imply -
+ing the potential for transdifferentiation (Fig. 4c ).
+We next tested the utility of FeatureMAP in pinpointing key regu-
+lators by focusing on one specific trajectory from Exh-Int to Exh-KLR 
+(Fig. 4d and Extended Data Fig. 6c). The DGV analysis of GVA clusters 
+(Exh-Int core-state cluster versus Exh-Int to Exh-KLR transition-state 
+cluster) revealed 18 significantly upregulated genes (logFC > 2, FDR 
+< 0.05), including co-stimulatory receptors (Klra9, Klre1, Klrc1, 
+Klrd1, Klrk1), cytotoxic effectors (Gzmb, Gzma), transcription factor 
+Zeb2, and migration-related proteins (S1pr5, Rap1b, Klf2) (Fig. 4d, 
+Extended Data Fig. 6d and Supplementary Table 1). Zeb2, ranked third 
+by FDR, has been experimentally validated as a key driver of Exh-KLR 
+differentiation22. Furthermore, FeatureMAP also demonstrated 
+its superiority in visualization and identification of key regulators 
+including Zeb2 in a completely independent dataset generated by a 
+similar experimental setting of chronic LCMV infection23 (Fig. 4e and 
+Extended Data Fig. 6e). These results highlight FeatureMAP’s strength 
+in analyzing regulatory mechanisms underlying dynamic and complex 
+cell differentiation.
+FeatureMAP enables the definition of the transition-state cell 
+population in exhaustion CD8+ T cell differentiation
+FeatureMAP enables the identification of core- versus transition-state 
+cells in dynamic process of cell development and differentiation, as well 
+as revealing potential regulators through DGV analysis. This raises the 
+question of whether the transition-state population inferred computa -
+tionally can be experimentally detected. The prominent characteristic 
+of transition states is high gene variation, but current wet-lab technol -
+ogy cannot directly measure gene variation. Therefore, our strategy 
+was to screen top-ranked genes in DGV analysis and select those with 
+substantial expression in the transition-state cluster. These candidate 
+genes may be used to experimentally characterize the transition-state 
+population. To be noted, we should not expect cells in a transition 
+state ubiquitously and pronouncedly to express a large number of 
+marker genes. Otherwise, these transition-state cells would have been 
+computed as core states.
+We revisited the differentiation trajectory from Exh-Int to Exh-KLR 
+(Fig. 5a). In the original UMAP-based analysis, Klrd1 and Klrc1 were 
+used as markers22, but their expression, inferred by imputation24, 
+substantially overlapped between the GVA Exh-Int and Exh-KLR 
+clusters, thus failing to resolve the transition population (Fig. 5b ). 
+In contrast, our DGV analysis of the GVA clusters (Exh-Int core-state 
+cluster versus Exh-Int to Exh-KLR transition-state cluster) revealed 
+Gzma and Klra9 as top-ranked candidates (Fig. 5c,d). Gzma was largely 
+absent in the Exh-Int core-state cluster, upregulated in the Exh-Int to 
+Fig. 4 | FeatureMAP on exhausted CD8+ T cell data reveals the regulatory gene 
+toward the Exh-KLR cell state. a, Correlation of original and embedding local 
+radii by UMAP and FeatureMAP GEX, respectively. b , Visualization of the CD8+ 
+T cell data by UMAP and FeatureMAP. Colors represent different cell types. Inset 
+plots show color-coded cells specific for the timepoints post infection. Exh-Pre, 
+exhausted precursor; Exh-Prog, exhausted progenitor; Exh-HSP, exhausted heat 
+shock protein–associated; Exh-Eeff, exhausted effector-like cells. c , Density 
+contour plot of the FeatureMAP GEX embedding (left, shading indicates density), 
+followed by visualization of core and transition states on GEX embedding and 
+GVA embedding (middle, right). d , FeatureMAP identifies the regulatory gene 
+toward Exh-KLR cell states. The GVA embedding visualizes the path from  Exh-Int cells to Exh-KLR cells, refined by Leiden clustering (inset), with core 
+states colored orange and transition states blue. The volcano plot shows the DGV 
+analysis comparing transition states versus core states, revealing the regulatory 
+gene Zeb2. This gene is visualized in the GVA embedding, showing gene variation 
+score and gene contribution (shade indicates density); the color bar indicates 
+gene variation values. e , Validation of FeatureMAP using another exhausted CD8+ 
+T cell dataset to identify the regulatory gene Zeb2. FeatureMAP GVA embedding 
+visualizes different cell types (left) and the path from Exh-Int cells to Exh-KLR 
+cells (middle). The DGV analysis results are shown in the volcano plot (right). 
+Gene Zeb2 is visualized by gene variation score and gene contribution (shade 
+indicates density); the color bar indicates gene variation values.
+
+[Page 8]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6Exh-KLR transition-state cluster, and peaked in the Exh-KLR core-state 
+cluster. Klra9 was selectively expressed in the Exh-Int to Exh-KLR 
+transition-state cluster (Fig. 5e and Extended Data Fig. 7a,b). Their 
+combined expression, inferred through imputation, delineates the full trajectory: Exh-Int (Gzma−Klra9−), transition (Klra9+) and Exh-KLR 
+(Gzma+Klra9−) (Fig. 5f ).
+To experimentally validate the transition-state population 
+defined by FeatureMAP and characterized by DGV markers, we 
+Klre1Zeb2
+Gzma
+Klrk1
+Klra9S1pr5
+Klrc1
+Klra3
+Klrb1cKcnj8Klre1
+Klrc1
+Zeb2
+S1pr5
+Gzma
+Klrd1Rap1b
+Klrk1Klra9
+Klf2 GzmbGEX density GEX core-state cells GVA core-state cells
+Core state
+Transition state
+Zeb2 Zeb2Gene variation scorec
+d
+Exh-KLRExh-Int
+logFC variation–logFDR
+–2.5 0 2.5 5.002040Transition
+(Exh-KLR)Core 
+(Exh-Int)
+logFC variation–logFDR
+–2.5 0 2.5 5.001020Transition
+(Exh-KLR)Core 
+(Exh-Int)
+30e Zeb2Gene variation
+score Gene
+contributionExh-KLRExh-IntGene variation trajectory
+Gene variation trajectoryGene contributionUMAP FeatureMAP GEXb
+Day 8 Day 15
+Day 30FeatureMAP GVA UMAP
+Original local
+radius (log) 4 6 8–5–3–1
+–6–22R2 = 0.5a
+R2 = 0.085
+FeatureMAP-GEX
+Leiden
+Leiden135FeatureMAP GVAProlif I
+Exh-IntProlif II
+Exh-KLREﬀ-like
+Exh-TermISG
+Exh-TermGzmaExh-Pre Exh-Prog
+Exh-HSP
+Exh-Int /uni2192 Exh-KLR
+Exh-Int /uni2192 Exh-KLREmbedding local radius (log)
+T-naive
+Exh-IntExh-Prog
+Exh-KLRExh-Eeﬀ
+Exh-Term
+135
+
+
+[Page 9]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6conducted an in vivo tracking experiment using TCR-transgenic 
+(P14) CD8+ T cells specific to LCMV22. Assuming gene–protein cor -
+respondence, we used flow cytometry to track protein levels of these 
+two markers following adoptive transfer and LCMV clone 13 infec -
+tion. Splenocytes were collected on days 14, 21 and 28 post-infection 
+for phenotypic analysis (Fig. 5g). CD8+ T cells were classified into 
+progenitor (LY108+CX3CR1−), terminal (LY108−CX3CR1−) and inter -
+mediate (LY108−CX3CR1+) exhausted subsets, with the intermedi -
+ate subset spanning the Exh-Int to Exh-KLR trajectory22. Consistent 
+with FeatureMAP predictions (Fig. 5a,f ), KLRA9+ transition-state 
+cells were detected, flanked by Exh-Int (GZMA−KLRA9−) and Exh-KLR 
+(GZMA+KLRA9−) core-state cells (Fig. 5h). Transition-state cells peaked 
+at day 21, preceding the rise in Exh-KLR core-state cells by day 28, while 
+Exh-Int core-state cells declined. This temporal progression mirrors 
+the trends in scRNA-seq data (Fig. 5i,j), supporting the biological 
+relevance of FeatureMAP-inferred cell states.
+A similar KLRA9+ transition-state population could also be 
+detected in the endogenous CD8+ T cells, showing a steady increase 
+from day 14 to day 28 post-infection (Extended Data Fig. 7c,d). These 
+findings validate the transition states predicted by FeatureMAP and 
+highlight our method’s utility in identifying and isolating cell popula-
+tions of transition state in dynamic differentiation.
+FeatureMAP outperforms competing methods in visualizing 
+gene dynamics and cell states
+To benchmark FeatureMAP’s effectiveness in visualizing gene dynam-
+ics and cell states, we compared it against dimensionality reduction 
+and trajectory inference methods (‘Benchmark FeatureMAP against 
+other methods’ in Methods). Unlike UMAP, t -SNE, densMAP, PHATE, 
+local linear embedding (LLE)25 or RNA velocity26,27, FeatureMAP 
+uniquely provides interpretable projections of gene contributions, 
+capturing both magnitude and direction across differentiation tra -
+jectories (Extended Data Fig. 8). In pancreatic data, it clearly resolves 
+lineage-defining roles of Arx and Pdx1  (Fig. 3f,g), whereby RNA velocity 
+by scVelo27 failed to recover such information (Supplementary Figs. 7–
+10). Gene variation vector fields also reveal clearer trajectories, and its 
+GVA embedding preserves fine-grained knot-and-thread structures 
+(Supplementary Figs. 11 and 12), outperforming UMAP, PHATE and t-SNE. 
+FeatureMAP excels in pseudotime inference across synthetic, pancreatic 
+and CD8+ T cell data ( R2 > 0.8; Extended Data Fig. 9) and achieves the 
+highest silhouette scores and clustering coefficients in defining cells of 
+core and transition states (Fig. 6a,b and Extended Data Fig. 10). When 
+applied to cell states from Mellon28 and MuTrans29, FeatureMAP shows 
+clearer state separation than the original UMAP/ t-SNE visualizations 
+(Supplementary Figs. 13 and 14).
+Discussion
+The central contribution of FeatureMAP is the demonstration that 
+source feature information, routinely not preserved by nonlinear dimensionality reduction, can be systematically recovered and embed -
+ded alongside topological structure. By grounding feature interpreta -
+tion in tangent space geometry, FeatureMAP reframes dimensionality 
+reduction from a purely structural task into an interpretive one. In 
+scRNA-seq analysis, FeatureMAP treats genes not just as inputs to cal-
+culate distance metric, but as explicitly represented elements within 
+low-dimensional embedding.
+A key implication of preserving feature loadings in low-dimensional 
+embeddings is that gene-level hypotheses can be formulated directly 
+from the visualization, rather than requiring a separate post-hoc analy -
+sis pipeline. In conventional workflows, such as in UMAP, dimension-
+ality reduction produces clusters or trajectories that must then be 
+interrogated with DGE analysis to identify gene information. Fea -
+tureMAP bridges these two steps: gene contributions and variation 
+scores are co-embedded with the cellular landscape. Such embedding 
+itself already exposes the dynamics of gene changes along with local 
+structure in situ, with downstream analyses such as DGV further guid -
+ing researchers to identify which genes may drive cell development 
+or differentiation. This is particularly valuable for discovering novel 
+regulators of poorly characterized biological processes, where exist-
+ing knowledge such as marker or driver genes remains very limited.
+Besides the advantage of directly visualizing gene dynamics in 
+low-dimensional embeddings, FeatureMAP embeddings distinguish 
+core and transition states. Unlike existing methods that focus on stable 
+and common properties of cell clusters, FeatureMAP defines cells in 
+transition states that occupy geometrically unstable positions charac-
+terized by high curvature and betweenness centrality. Such transient 
+populations are only partially fate-committing to the progeny and 
+probably also reversible to the progenitor, which are difficult to capture 
+with cluster-based methods30.
+Using a FeatureMAP-based pipeline, we identified markers of 
+CD8+ T cells in a transition state preceding Exh-KLR differentiation 
+in chronic viral infection. This enabled us to physically isolate this 
+population by flow cytometry and validate its temporal dynamics. To 
+our knowledge, experimental validation of cells in transition states has 
+rarely been achieved. The FeatureMAP-based pipeline thus provides 
+an opportunity not only to virtually analyze cells in transition states 
+to understand the dynamic regulation of genes and pathways in cell 
+development or differentiation but also to physically isolate these cells 
+for downstream functional applications.
+Several limitations of the current study should be noted. First, 
+FeatureMAP relies on local PCA to estimate tangent spaces, which 
+assumes that the manifold is locally linear within each k -nearest neigh -
+borhood. This assumption may break down in regions of high curvature 
+or sparse sampling, leading to inaccurate tangent space estimates 
+and, consequently, unreliable feature loadings. Second, the intrinsic 
+dimensionality d is fixed across all data points, an approximation that 
+may not hold for datasets where different regions of the manifold have 
+genuinely different intrinsic dimensions, such as quiescent versus 
+Fig. 5 | FeatureMAP reveals a transition state toward the NK-cell-like 
+exhausted CD8+ T cells. a, Cells transition from the core state in Exh-Int (light 
+orange) to the core state in Exh-KLR (dark orange) via an intermediate transition 
+state (blue). b , Scatter plots illustrating the imputed expression of Klrd1 and  
+Klrc1 both within each individual state and across the three states collectively.  
+c, Volcano plot displaying DGV analysis comparing the transition state of Exh-
+KLR cells with the core state in Exh-Int cells, highlighting the key genes Klra9  
+and Gzma. The inset illustrates the path from Exh-Int to Exh-KLR cells, with core 
+states shown in orange and transition states in blue. d , FeatureMAP visualizes the 
+gene variation of Klra9 and Gzma, with colors representing gene variation scores. 
+e, The curve plot depicts the expression dynamics of Klra9, Gzma and Zeb2  
+along pseudotime, showing the progression from the core state in Exh-Int (light 
+orange) through the intermediate transition state (blue) to the core state in Exh-
+KLR (dark orange). f , Scatter plots illustrate the imputed expression of Klra9 and 
+Gzma both within each individual state and across the three states collectively. g, Experimental schematic for testing the marker genes of Klra9 in the transition 
+state using the clone 13 infection mouse model. h , Left: parent gating strategy 
+for identifying transitional cells. Right: representative flow cytometry plots of 
+P14 cells (gated on CX3CR1+LY108− population as defined in the left panel) at 
+days 14, 21 and 28 post-LCMV clone 13 infection. i , Left: box plots comparing cell 
+populations at days 14, 21, and 28 (n  = 4, 5, 5). Each dot represents one mouse.  
+The median is shown as a center line, boxes indicate the 25th–75th percentiles, 
+and whiskers span the full data range. Statistical significance was assessed  
+by two-sided one-way analysis of variance with Tukey’s test; adjusted  
+P values are shown. Right: stacked bar plot showing temporal progression of 
+mean cellular proportions from day 14 to day 28 post-infection. j , Left: changes 
+in cell populations from day 15 to day 30 during differentiation from the Exh-Int 
+to Exh-KLR state in scRNA-seq data. Core states are represented in light and dark 
+orange, while transition states are shown in blue. Right: temporal progression of 
+cellular proportions in scRNA-seq data from day 15 to day 30 post-infection.
+
+[Page 10]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6
+Klre1
+Klrc1
+Zeb2
+S1pr5
+Gzma
+Klrd1Rap1b
+Klrk1Klra9
+Klf2 Gzmb
+ga c
+e
+i
+jGene variation (logFC)–logFDR
+–2.5 0 2.5 5.002040Transition Exh-Int (core)
+Gene variation
+Klra9 Gzma
+135
+Exh-Int (core)TransitionExh-KLR (core)
+Day 15 Day 30Exh-Int
+Exh-KLRTransition
+0.5 1.0 1.50.51.01.5Klrd1
+Klrc1Gene expression
+2.0
+2.0b
+Exh-Int
+Exh-KLR
+Transition stateCore stateFeatureMAP GVA
+d
+Gzma1 2 31.01.4
+0.20.6Klra9Gene expression
+4Exh-Int
+Transition
+Exh-KLRf
+–1 21 28 14 0
+T cell (P14) transferInfection Flow cytometry
+(day)
+GZMA-BV421KLRA9-BUV496
+0 1031040103104105
+0.48
+91.2 8.06Day 14 Day 21
+9.99
+72.4 17.2Day 28
+12.3
+37.8 49.4h
+LY108-PE
+CX3CR1-BV78500103104105
+Transition stateCore stateD14 D21 D28020406080100Percentage in Cx3cr1+ cells
+D15 D30Percentage of total cells
+(three states)
+020406080100Exh-Int core (GZMA–KLRA9–)
+(% in CX3CR1+ cells)
+Transition (KLRA9+)
+(% in CX3CR1+ cells)
+Exh-KLR core (GZMA+KLRA9–)
+(% in CX3CR1+ cells)
+020406080100
+D14 D21D28<0.001
+0.004
+0515
+10
+D14 D21D28<0.001
+<0.001
+0204060
+D14 D21D280.003
+0.005Gene expression trend
+Klra9
+Gzma
+Transition stateCore state
+1031041050 1031040 103104
+
+
+[Page 11]
+Nature Computational Science
+Article https://doi.org/10.1038/s43588-026-00970-6actively differentiating cell populations. Third, FeatureMAP captures 
+first-order gene variation within local tangent spaces but does not 
+model higher-order gene–gene interactions or covariance structure, 
+which may limit its ability to detect combinatorial regulatory pro -
+grams. Finally, the computational cost of performing local SVD and 
+tangent space alignment at each data point scales with dataset size
+
+[Text truncated due to length...]

@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "word": "approximation",
+    "context_sentence": "ehttps://doi.org/10.1038/s43588-026-00970-6 Article Feature-preserving manifold approximation  and projection to analyze single-cell data",
+    "explanation": "**1. Clear definition:** In this context, \"approximation\" means creating a simplified, lower-dimensional version of complex data (like gene expression from thousands of cells) that still captures the most important patterns and relationships.\n\n**2. Why it matters here:** Single-cell data has thousands of genes per cell, making it impossible to visualize directly. Manifold approximation creates a 2D or 3D map that preserves the \"shape\" of the data (clusters and transitions between cell types) while discarding less important details. The new method, FeatureMAP, improves this approximation by also preserving gene-level information.\n\n**3. Example sentence:** \"Uniform manifold approximation and projection (UMAP) creates a simplified map of single-cell data to reveal cell clusters, but it often loses information about which genes define those clusters.\"\n\n**4. Related terms:** Dimensionality reduction, manifold learning, embedding, projection, UMAP, t-SNE.",
+    "timestamp": "2026-05-24T23:44:28.746949",
+    "pdf_source": "[Page 1]\nNature Computational Science\nnature computational sciencehttps://doi.org/10.1038/s43588-026-00970-6\nArticle\nFeature-preserving manifold approximation \nand projection to analyze single-cell da",
+    "conversation_context": ""
+  },
+  {
+    "id": 2,
+    "word": "GRN",
+    "context_sentence": "generated from a bifurcation model  defined by a known gene regulatory network (GRN; Fig. 2a and ‘Syn - thetic data generation’ in Methods), we demonstrate that Fe",
+    "explanation": "**Definition:**  \nGRN stands for **Gene Regulatory Network** – the set of interactions (e.g., activation or repression) among genes that control cell behavior. In the paper, a known GRN is used as the ground truth to generate synthetic single-cell data from a mathematical bifurcation model.\n\n**Why it matters:**  \nThe GRN provides a controlled, interpretable starting point to test FeatureMAP. Knowing the true regulatory relationships lets the authors verify whether the method correctly recovers key genes driving cell-state transitions.\n\n**Example sentence:**  \nThe synthetic dataset was generated from a bifurcation model whose dynamics were governed by a known gene regulatory network (GRN), allowing direct comparison of the method’s output with the original rules.\n\n**Related terms:**  \n- Transcription factor  \n- Regulatory motif  \n- Bifurcation model  \n- Gene expression dynamics",
+    "timestamp": "2026-05-24T23:52:54.063460",
+    "pdf_source": "[Page 1]\nNature Computational Science\nnature computational sciencehttps://doi.org/10.1038/s43588-026-00970-6\nArticle\nFeature-preserving manifold approximation \nand projection to analyze single-cell da",
+    "conversation_context": "\n        You\n        yes please\n        11:48 PM\n     | \n        Explainer AI\n        I understand you'd like to hear directly from the Main AI. However, I need to be transparent with you:I can't actu"
+  },
+  {
+    "id": 3,
+    "word": "he human body is",
+    "context_sentence": "he human body is colonized by trillions of microorganisms",
+    "explanation": "**1) Definition as used here**  \n\"Colonized\" means that the human body is **inhabited or lived on** by trillions of tiny organisms (microbes). It does **not** mean \"sick\" or \"infected\"—it’s a normal, healthy state.\n\n**2) Why it matters**  \nThis fact changes how we think about health. These microbes help digest food, train our immune system, and protect against harmful germs. Understanding this helps scientists develop treatments for diseases like obesity, allergies, and gut problems.\n\n**3) Example**  \nYour skin, mouth, and intestines are all colonized by bacteria. For instance, *Lactobacillus* bacteria live in your gut and help break down milk sugars.\n\n**4) Related terms**  \n- **Microbiome**: the entire collection of microbes (bacteria, viruses, fungi) living in/on you.  \n- **Symbiosis**: a mutually beneficial relationship between host and microbe.  \n- **Dysbiosis**: an unhealthy imbalance of these microbes.",
+    "timestamp": "2026-05-25T15:14:41.891374",
+    "pdf_source": "[Page 1]\nPersPective\nhttps:/ / doi.org/10.1038/s41564-017-0072-8\n© 2017 Macmillan Publishers Limited, part of Springer Nature. All rights reserved. © 2017 Macmillan Publishers Limited, part of Springe",
+    "conversation_context": ""
+  }
+]
