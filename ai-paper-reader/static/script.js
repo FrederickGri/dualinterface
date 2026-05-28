@@ -1,15 +1,83 @@
 /* ═══════════════════════════════════════════════════════
-   AI Paper Reader v3.6
-   Fixed: text selection accuracy, pinch zoom, scroll preservation
+   AI Paper Reader v5
+   Chrome Native PDF + Dictionary via Selection Intercept
+   Sidebar: collapsed by default, expands on click
+   Chat minimize: PDF fills all space
    ═══════════════════════════════════════════════════════ */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
-marked.setOptions({ breaks: true, gfm: true });
+function safe$(sel) { const el = document.querySelector(sel); if (!el) console.warn('Missing:', sel); return el; }
+function safe$$(sel) { return document.querySelectorAll(sel); }
+
+const PROVIDER_PRESETS = {
+    siliconflow: {
+        label: 'SiliconFlow',
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        mainModel: 'deepseek-ai/DeepSeek-V4-Pro',
+        explainerModel: 'deepseek-ai/DeepSeek-V4-Pro',
+        keyHint: 'SiliconFlow is the default. Leave blank to use builtinapikey in app.py when it is set.',
+        models: [
+            ['deepseek-ai/DeepSeek-V4-Pro', 'DeepSeek V4 Pro'],
+            ['deepseek-ai/DeepSeek-V3.2', 'DeepSeek V3.2'],
+            ['deepseek-ai/DeepSeek-R1', 'DeepSeek R1'],
+            ['Qwen/Qwen3-Coder-480B-A35B-Instruct', 'Qwen3 Coder 480B'],
+        ],
+    },
+    deepseek: {
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com',
+        mainModel: 'deepseek-chat',
+        explainerModel: 'deepseek-chat',
+        keyHint: 'Use your DeepSeek API key.',
+        models: [
+            ['deepseek-chat', 'DeepSeek Chat'],
+            ['deepseek-reasoner', 'DeepSeek Reasoner'],
+        ],
+    },
+    qwen: {
+        label: 'Qwen / DashScope',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        mainModel: 'qwen-plus',
+        explainerModel: 'qwen-turbo',
+        keyHint: 'Use your DashScope API key.',
+        models: [
+            ['qwen-plus', 'Qwen Plus'],
+            ['qwen-turbo', 'Qwen Turbo'],
+            ['qwen-max', 'Qwen Max'],
+        ],
+    },
+    volcengine: {
+        label: 'Volcengine Ark',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        mainModel: '',
+        explainerModel: '',
+        keyHint: 'Use your Ark API key. Model fields are usually your Ark endpoint IDs.',
+        models: [],
+    },
+    openai: {
+        label: 'OpenAI',
+        baseUrl: 'https://api.openai.com/v1',
+        mainModel: 'gpt-4o-mini',
+        explainerModel: 'gpt-4o-mini',
+        keyHint: 'Use your OpenAI API key.',
+        models: [
+            ['gpt-4o-mini', 'GPT-4o mini'],
+            ['gpt-4o', 'GPT-4o'],
+            ['gpt-4.1-mini', 'GPT-4.1 mini'],
+        ],
+    },
+    custom: {
+        label: 'Custom',
+        baseUrl: '',
+        mainModel: '',
+        explainerModel: '',
+        keyHint: 'Enter an OpenAI-compatible base URL, API key, and model names.',
+        models: [],
+    },
+};
 
 const state = {
-    layout: 'horizontal',
     wordCards: [],
     activeWord: null,
     isResizing: false,
@@ -17,116 +85,458 @@ const state = {
     projects: [],
     activeProjectId: '',
     activeProject: null,
-    pdfMode: 'pdf',
-    pdfDoc: null,
-    pdfPages: [],
-    pdfScale: 1.5,
-    dictionaryOn: true,
-    panelStates: { 'panel-pdf': true, 'panel-main': true, 'panel-explainer': true },
-    // Scroll preservation
-    pdfScrollTop: 0,
-    pdfScrollLeft: 0,
-    // Pinch debounce
-    pinchTimer: null,
-    isPinching: false,
+    readMode: false,
+    chatMinimized: false,
+    sidebarExpanded: false,
+    selectedText: '',
+    selectedContext: '',
+    selectedAt: 0,
+    abortControllers: { main: null, explainer: null },
 };
+const hookedPDFDocs = new WeakSet();
 
-const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-
-// ═══════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════
+// ═══════════ INIT ═══════════
 async function init() {
-    await loadSettings();
-    await loadProjects();
-    await loadWordCards();
-    setupEventListeners();
-    setupDividers();
-    setupDragDrop();
-    setupContextMenu();
-    setupTextSelectionHandling();
+    console.log('🚀 Starting...');
+    try {
+        await loadSettings();
+        await loadProjects();
+        await loadWordCards();
+        setupEventListeners();
+        setupDividers();
+        setupDragDrop();
+        setupPDFSelectionHook();
+        console.log('✅ Ready');
+    } catch(e) { console.error('Init:', e); showToast('Error: ' + e.message, 'error'); }
 }
 document.addEventListener('DOMContentLoaded', init);
 
-// ═══════════════════════════════════════════════════════
-// SETTINGS
-// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════
+// THE GENIUS PART: Dictionary on Chrome PDF
+// ═══════════════════════════════════════════
+function setupPDFSelectionHook() {
+    const iframe = safe$('#pdf-iframe');
+    if (!iframe) return;
+
+    iframe.addEventListener('load', () => {
+        console.log('📄 PDF loaded, hooking selection...');
+        tryHookIframe(iframe, 0);
+    });
+
+    // The user might have already loaded a PDF before this init ran
+    if (iframe.src && iframe.style.display !== 'none') {
+        setTimeout(() => tryHookIframe(iframe, 0), 500);
+    }
+}
+
+function tryHookIframe(iframe, attempts) {
+    if (attempts > 20) { console.log('⚠️ Could not hook PDF iframe after 20 attempts'); return; }
+
+    try {
+        const doc = iframe.contentDocument || iframe.contentWindow.document;
+        if (!doc || !doc.body) {
+            setTimeout(() => tryHookIframe(iframe, attempts + 1), 500);
+            return;
+        }
+
+        if (hookedPDFDocs.has(doc)) return;
+        hookedPDFDocs.add(doc);
+        console.log('✅ Hooked into PDF iframe!');
+
+        // Listen for mouseup (text selection finished)
+        doc.addEventListener('mouseup', (e) => {
+            setTimeout(() => {
+                const picked = getSelectionFromDocument(doc);
+                if (picked) {
+                    const cached = rememberPDFSelection(picked.text, picked.contextSentence);
+                    const rect = iframe.getBoundingClientRect();
+                    showSelectionPopover(cached.text, rect.left + e.clientX, rect.top + e.clientY);
+                }
+            }, 50);
+        });
+
+        // Also listen for copy event (user does Cmd+C)
+        doc.addEventListener('copy', (e) => {
+            const picked = getSelectionFromDocument(doc);
+            if (picked) {
+                const cached = rememberPDFSelection(picked.text, picked.contextSentence, true);
+                const rect = iframe.getBoundingClientRect();
+                showSelectionPopover(cached.text, rect.left + rect.width - 170, rect.top + 16);
+                return;
+            }
+            showClipboardPopoverFromIframe(iframe);
+        }, true);
+
+        // Chrome's PDF viewer often keeps focus inside the iframe, so mirror shortcuts here too.
+        doc.addEventListener('keydown', (e) => {
+            if (!(e.metaKey || e.ctrlKey)) return;
+            const key = e.key.toLowerCase();
+            if (key === 'e') {
+                e.preventDefault();
+                explainPDFSelection({ preferClipboard: true });
+            } else if (key === 'c') {
+                showClipboardPopoverFromIframe(iframe);
+            }
+        }, true);
+
+    } catch(e) {
+        // Cross-origin or not ready yet
+        console.log(`Attempt ${attempts}: ${e.message}`);
+        setTimeout(() => tryHookIframe(iframe, attempts + 1), 500);
+    }
+}
+
+function normalizeSelectionText(text) {
+    return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function getSelectionFromDocument(doc) {
+    if (!doc) return null;
+    const sel = doc.getSelection?.();
+    const text = normalizeSelectionText(sel ? sel.toString() : '');
+    if (!text || text.length > 500) return null;
+
+    let contextSentence = text;
+    if (sel?.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const container = range.commonAncestorContainer;
+        const fullText = normalizeSelectionText(container.textContent || '');
+        const idx = fullText.indexOf(text);
+        if (idx !== -1) {
+            const start = Math.max(0, idx - 80);
+            const end = Math.min(fullText.length, idx + text.length + 80);
+            contextSentence = fullText.substring(start, end).trim();
+        }
+    }
+    return { text, contextSentence };
+}
+
+function findPDFContextForText(text) {
+    const pdfText = state.activeProject?.pdf_context || '';
+    if (!pdfText || !text) return text;
+
+    const exactIdx = pdfText.indexOf(text);
+    const lowerIdx = exactIdx === -1 ? pdfText.toLowerCase().indexOf(text.toLowerCase()) : exactIdx;
+    const idx = exactIdx !== -1 ? exactIdx : lowerIdx;
+    if (idx === -1) return text;
+
+    const start = Math.max(0, idx - 120);
+    const end = Math.min(pdfText.length, idx + text.length + 120);
+    return normalizeSelectionText(pdfText.substring(start, end));
+}
+
+function rememberPDFSelection(text, contextSentence, silent = false) {
+    const cleaned = normalizeSelectionText(text);
+    if (!cleaned || cleaned.length > 500) return null;
+
+    state.selectedText = cleaned;
+    state.selectedContext = normalizeSelectionText(contextSentence) || findPDFContextForText(cleaned);
+    state.selectedAt = Date.now();
+
+    if (!silent) {
+        showToast(`Selected: "${cleaned.substring(0, 50)}${cleaned.length > 50 ? '...' : ''}"`, 'success');
+    }
+    return { text: state.selectedText, contextSentence: state.selectedContext };
+}
+
+function showSelectionPopover(text, x, y) {
+    const pop = safe$('#selection-popover');
+    const label = safe$('#selection-popover-text');
+    if (!pop || !label || !text) return;
+
+    label.textContent = `"${text.substring(0, 48)}${text.length > 48 ? '...' : ''}"`;
+    pop.classList.remove('hidden');
+
+    const margin = 12;
+    const popRect = pop.getBoundingClientRect();
+    const left = Math.min(Math.max(margin, x + 10), window.innerWidth - popRect.width - margin);
+    const top = Math.min(Math.max(margin, y + 10), window.innerHeight - popRect.height - margin);
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+}
+
+function hideSelectionPopover() {
+    const pop = safe$('#selection-popover');
+    if (pop) pop.classList.add('hidden');
+}
+
+function maybeShowDocumentSelectionPopover(e) {
+    const pop = safe$('#selection-popover');
+    if (pop?.contains(e.target)) return;
+
+    const pdfArea = safe$('#pdf-content-area');
+    if (!state.readMode || !pdfArea?.contains(e.target)) return;
+
+    setTimeout(() => {
+        const picked = getSelectionFromDocument(document);
+        if (!picked) return;
+        const cached = rememberPDFSelection(picked.text, picked.contextSentence, true);
+        if (cached) showSelectionPopover(cached.text, e.clientX, e.clientY);
+    }, 0);
+}
+
+function cachePDFSelection(silent = true) {
+    const iframe = safe$('#pdf-iframe');
+    if (iframe) {
+        try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            const picked = getSelectionFromDocument(doc);
+            if (picked) return rememberPDFSelection(picked.text, picked.contextSentence, silent);
+        } catch(e) {}
+    }
+
+    const picked = getSelectionFromDocument(document);
+    if (picked) return rememberPDFSelection(picked.text, picked.contextSentence, silent);
+
+    return null;
+}
+
+function getRecentStoredSelection(maxAgeMs = 60000) {
+    if (!state.selectedText) return null;
+    if (Date.now() - state.selectedAt > maxAgeMs) return null;
+    return { text: state.selectedText, contextSentence: state.selectedContext || state.selectedText };
+}
+
+async function readClipboardSelection() {
+    if (!navigator.clipboard?.readText) return null;
+    try {
+        const text = normalizeSelectionText(await navigator.clipboard.readText());
+        if (!text || text.length > 500) return null;
+        return rememberPDFSelection(text, findPDFContextForText(text), true);
+    } catch(e) {
+        return null;
+    }
+}
+
+async function getPDFSelection(options = {}) {
+    const preferClipboard = !!options.preferClipboard && !state.readMode;
+    if (preferClipboard) {
+        const copied = await readClipboardSelection();
+        if (copied) return copied;
+    }
+
+    return cachePDFSelection(true) || getRecentStoredSelection(15000) || await readClipboardSelection() || getRecentStoredSelection();
+}
+
+async function explainPDFSelection(options = {}) {
+    const picked = await getPDFSelection(options);
+    if (!picked?.text) {
+        showToast('Copy PDF text first, then press Cmd+E or click Explain. Text Mode also works.', 'error');
+        return;
+    }
+
+    hideSelectionPopover();
+    const contextSentence = picked.contextSentence || picked.text;
+    state.activeWord = { word: picked.text, contextSentence };
+    await explainWordDirectly(picked.text, contextSentence);
+}
+
+function showClipboardPopoverFromIframe(iframe) {
+    setTimeout(async () => {
+        const copied = await readClipboardSelection();
+        if (!copied) return;
+        const rect = iframe.getBoundingClientRect();
+        showSelectionPopover(copied.text, rect.left + rect.width - 190, rect.top + 14);
+    }, 80);
+}
+
+// Also hook re-selection when user clicks "Explain" button
+function reHookAfterModeChange() {
+    const iframe = safe$('#pdf-iframe');
+    if (iframe && iframe.style.display !== 'none') {
+        setTimeout(() => tryHookIframe(iframe, 0), 300);
+    }
+}
+
+// ═══════════ SETTINGS ═══════════
+function applyProviderPreset(provider, overwriteModels = false) {
+    const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+    const baseUrl = safe$('#api-base-url-input');
+    const apiLabel = safe$('#api-key-label');
+    const apiHint = safe$('#api-key-hint');
+    const mainModel = safe$('#main-model-select');
+    const explainerModel = safe$('#explainer-model-select');
+
+    if (baseUrl && (overwriteModels || !baseUrl.value.trim())) baseUrl.value = preset.baseUrl;
+    if (apiLabel) apiLabel.textContent = `${preset.label} API Key`;
+    if (apiHint) apiHint.textContent = preset.keyHint;
+    populateModelSelect(mainModel, preset, mainModel?.value || preset.mainModel);
+    populateModelSelect(explainerModel, preset, explainerModel?.value || preset.explainerModel);
+    if (mainModel && overwriteModels) {
+        populateModelSelect(mainModel, preset, preset.mainModel);
+        mainModel.dataset.previousValue = preset.mainModel;
+    }
+    if (explainerModel && overwriteModels) {
+        populateModelSelect(explainerModel, preset, preset.explainerModel);
+        explainerModel.dataset.previousValue = preset.explainerModel;
+    }
+    updateModelBadges();
+}
+
+function populateModelSelect(select, preset, currentValue) {
+    if (!select) return;
+    const models = preset.models || [];
+    const value = currentValue || preset.mainModel || '';
+    let options = models.map(([model, label]) => `<option value="${escHtml(model)}">${escHtml(label)} (${escHtml(model)})</option>`).join('');
+
+    if (value && !models.some(([model]) => model === value)) {
+        options += `<option value="${escHtml(value)}">${escHtml(value)}</option>`;
+    }
+    options += '<option value="__custom__">Custom model...</option>';
+    select.innerHTML = options;
+    select.value = value || '__custom__';
+}
+
+function handleModelSelectChange(select) {
+    if (!select || select.value !== '__custom__') {
+        updateModelBadges();
+        return;
+    }
+
+    const custom = prompt('Enter model name / endpoint ID:');
+    if (!custom?.trim()) {
+        select.value = select.dataset.previousValue || '';
+        updateModelBadges();
+        return;
+    }
+
+    const value = custom.trim();
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    select.insertBefore(option, select.querySelector('option[value="__custom__"]'));
+    select.value = value;
+    select.dataset.previousValue = value;
+    updateModelBadges();
+}
+
 async function loadSettings() {
     try {
         const res = await fetch('/api/settings');
         const d = await res.json();
-        if (d.layout) { state.layout = d.layout; updateLayoutUI(); }
-        if (d.main_model) $('#main-model-select').value = d.main_model;
-        if (d.explainer_model) $('#explainer-model-select').value = d.explainer_model;
-        if (d.sync_mode) $('#sync-mode-select').value = d.sync_mode;
+        const ps = safe$('#provider-select'), abu = safe$('#api-base-url-input'), aki = safe$('#api-key-input');
+        const mms = safe$('#main-model-select'), ems = safe$('#explainer-model-select'), sms = safe$('#sync-mode-select');
+        if (ps && d.provider) ps.value = d.provider;
+        if (abu && d.api_base_url) abu.value = d.api_base_url;
+        if (aki && d.api_key) aki.value = d.api_key;
+        if (sms && d.sync_mode) sms.value = d.sync_mode;
+        applyProviderPreset(ps?.value || d.provider || 'siliconflow', false);
+        if (mms && d.main_model) {
+            populateModelSelect(mms, PROVIDER_PRESETS[ps?.value || d.provider || 'siliconflow'] || PROVIDER_PRESETS.custom, d.main_model);
+            mms.dataset.previousValue = d.main_model;
+        }
+        if (ems && d.explainer_model) {
+            populateModelSelect(ems, PROVIDER_PRESETS[ps?.value || d.provider || 'siliconflow'] || PROVIDER_PRESETS.custom, d.explainer_model);
+            ems.dataset.previousValue = d.explainer_model;
+        }
         updateModelBadges();
     } catch(e) { console.error('Settings:', e); }
 }
 
 async function saveSettings() {
-    const s = $('#settings-status');
-    s.textContent = '⏳ Saving...'; s.className = '';
+    const status = safe$('#settings-status'); if (!status) return;
+    status.textContent = '⏳ Saving...'; status.className = '';
     try {
         const res = await fetch('/api/settings', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                api_key: $('#api-key-input').value.trim() || undefined,
-                main_model: $('#main-model-select').value,
-                explainer_model: $('#explainer-model-select').value,
-                sync_mode: $('#sync-mode-select').value,
-                layout: state.layout,
+                provider: safe$('#provider-select')?.value || 'siliconflow',
+                api_base_url: safe$('#api-base-url-input')?.value.trim() || '',
+                api_key: safe$('#api-key-input')?.value.trim() || '',
+                main_model: modelSelectValue(safe$('#main-model-select')) || 'deepseek-ai/DeepSeek-V4-Pro',
+                explainer_model: modelSelectValue(safe$('#explainer-model-select')) || 'deepseek-ai/DeepSeek-V4-Pro',
+                sync_mode: safe$('#sync-mode-select')?.value || 'latest_only',
             }),
         });
         const d = await res.json();
-        s.textContent = d.api_key_set ? '✅ Saved!' : '⚠️ Saved (no API key)';
-        s.className = d.api_key_set ? 'success' : 'error';
+        status.textContent = d.api_key_set ? '✅ Saved!' : '⚠️ Saved (no API key)';
+        status.className = d.api_key_set ? 'success' : 'error';
         updateModelBadges();
-        setTimeout(() => { s.textContent = ''; s.className = ''; }, 3000);
-    } catch(e) { s.textContent = '❌ Failed'; s.className = 'error'; }
+        setTimeout(() => { status.textContent = ''; status.className = ''; }, 3000);
+    } catch(e) { status.textContent = '❌ Failed'; status.className = 'error'; }
 }
 
 function updateModelBadges() {
-    const mm = $('#main-model-select').value;
-    const em = $('#explainer-model-select').value;
-    const mb = $('#main-model-badge');
-    const eb = $('#explainer-model-badge');
-    mb.textContent = mm === 'deepseek-reasoner' ? 'R1' : 'V3';
-    eb.textContent = em === 'deepseek-reasoner' ? 'R1' : 'V3';
-    mb.style.background = mm === 'deepseek-reasoner' ? 'var(--accent-mauve)' : 'var(--accent-blue)';
-    eb.style.background = em === 'deepseek-reasoner' ? 'var(--accent-mauve)' : 'var(--accent-green)';
+    const mm = modelSelectValue(safe$('#main-model-select')), em = modelSelectValue(safe$('#explainer-model-select'));
+    const mb = safe$('#main-model-badge'), eb = safe$('#explainer-model-badge');
+    const mainBadge = modelBadgeText(mm);
+    const explainerBadge = modelBadgeText(em);
+    if (mb) { mb.textContent = mainBadge.text; mb.style.background = mainBadge.color; }
+    if (eb) { eb.textContent = explainerBadge.text; eb.style.background = explainerBadge.color; }
 }
 
-function updateLayoutUI() {
-    $('#main-container').className = `layout-${state.layout}`;
-    $$('.divider').forEach(d => {
-        d.className = state.layout === 'horizontal' ? 'divider divider-vertical' : 'divider divider-horizontal';
-    });
-    $('#btn-layout').textContent = state.layout === 'horizontal' ? '↕️' : '↔️';
+function modelSelectValue(select) {
+    if (!select || select.value === '__custom__') return '';
+    return select.value;
 }
 
-// ═══════════════════════════════════════════════════════
-// PROJECTS
-// ═══════════════════════════════════════════════════════
+function modelBadgeText(model = '') {
+    const m = model.toLowerCase();
+    if (m.includes('r1') || m.includes('reasoner')) return { text: 'R1', color: 'var(--accent-mauve)' };
+    if (m.includes('v3') || m.includes('deepseek-chat')) return { text: 'V3', color: 'var(--accent-blue)' };
+    if (m.includes('qwen')) return { text: 'QWEN', color: 'var(--accent-yellow)' };
+    if (m.includes('gpt')) return { text: 'GPT', color: 'var(--accent-blue)' };
+    if (m.includes('doubao') || m.startsWith('ep-')) return { text: 'ARK', color: 'var(--accent-green)' };
+    return { text: 'AI', color: 'var(--accent-blue)' };
+}
+
+// ═══════════ SIDEBAR ═══════════
+function syncSidebarUI() {
+    const sidebar = safe$('#sidebar');
+    const toggle = safe$('#sidebar-toggle');
+    if (sidebar) sidebar.classList.toggle('expanded', state.sidebarExpanded);
+    if (toggle) {
+        toggle.textContent = state.sidebarExpanded ? '✕' : '☰';
+        toggle.title = state.sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar';
+    }
+}
+
+function toggleSidebar() {
+    state.sidebarExpanded = !state.sidebarExpanded;
+    syncSidebarUI();
+}
+function collapseSidebar() {
+    state.sidebarExpanded = false;
+    syncSidebarUI();
+}
+
+// ═══════════ PROJECTS ═══════════
 async function loadProjects() {
     try {
         const res = await fetch('/api/projects');
         const d = await res.json();
         state.projects = d.projects || [];
         state.activeProjectId = d.active_id || '';
-        renderProjectSelector();
+        syncSidebarUI();
+        renderSidebarProjects();
         if (state.activeProjectId) await loadActiveProject();
+        else clearAll();
     } catch(e) { console.error('Projects:', e); }
 }
 
-function renderProjectSelector() {
-    const sel = $('#project-select');
-    sel.innerHTML = state.projects.map(p =>
-        `<option value="${p.id}" ${p.id === state.activeProjectId ? 'selected' : ''}>${escHtml(p.name)}</option>`
-    ).join('');
+function renderSidebarProjects() {
+    const container = safe$('#sidebar-projects'); if (!container) return;
     if (state.projects.length === 0) {
-        sel.innerHTML = '<option value="">No PDF loaded</option>';
+        container.innerHTML = '<p class="sidebar-label">Conversations</p><p class="sidebar-empty-hint">No PDFs yet</p>';
+        return;
     }
+    container.innerHTML = '<p class="sidebar-label">Conversations</p>' +
+        state.projects.map(p => `
+            <div class="sidebar-project ${p.id === state.activeProjectId ? 'active' : ''}" data-id="${p.id}">
+                <span class="proj-name">${escHtml(p.name)}</span>
+                <button class="proj-delete" data-id="${p.id}">🗑️</button>
+            </div>
+        `).join('');
+    container.querySelectorAll('.sidebar-project').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('proj-delete')) return;
+            switchProject(el.dataset.id);
+            collapseSidebar();
+        });
+    });
+    container.querySelectorAll('.proj-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => { e.stopPropagation(); deleteProjectById(btn.dataset.id); });
+    });
 }
 
 async function switchProject(pid) {
@@ -134,21 +544,22 @@ async function switchProject(pid) {
     try {
         await fetch(`/api/projects/${pid}/activate`, { method: 'POST' });
         state.activeProjectId = pid;
-        renderProjectSelector();
+        renderSidebarProjects();
         await loadActiveProject();
     } catch(e) { showToast('Failed to switch', 'error'); }
 }
 
-async function deleteProject() {
+async function deleteProjectById(pid) {
     if (state.projects.length <= 1) { showToast("Can't delete last project", 'error'); return; }
-    const name = state.projects.find(p => p.id === state.activeProjectId)?.name || 'this';
-    if (!confirm(`Delete "${name}"? This removes the PDF and all chat history.`)) return;
+    if (!confirm(`Delete "${state.projects.find(p => p.id === pid)?.name || 'this'}"?`)) return;
     try {
-        await fetch(`/api/projects/${state.activeProjectId}`, { method: 'DELETE' });
-        state.projects = state.projects.filter(p => p.id !== state.activeProjectId);
-        state.activeProjectId = state.projects[0]?.id || '';
-        if (state.activeProjectId) await fetch(`/api/projects/${state.activeProjectId}/activate`, { method: 'POST' });
-        renderProjectSelector();
+        await fetch(`/api/projects/${pid}`, { method: 'DELETE' });
+        state.projects = state.projects.filter(p => p.id !== pid);
+        if (state.activeProjectId === pid) {
+            state.activeProjectId = state.projects[0]?.id || '';
+            if (state.activeProjectId) await fetch(`/api/projects/${state.activeProjectId}/activate`, { method: 'POST' });
+        }
+        renderSidebarProjects();
         await loadActiveProject();
         showToast('Deleted', 'success');
     } catch(e) { showToast('Failed', 'error'); }
@@ -162,877 +573,583 @@ async function loadActiveProject() {
         renderChatHistory();
         renderPDFContent();
         updatePDFTitle();
+        reHookAfterModeChange();
     } catch(e) { console.error('Load project:', e); }
 }
 
 function updatePDFTitle() {
     if (state.activeProject) {
-        $('#pdf-title').textContent = state.activeProject.pdf_filename || state.activeProject.name || 'Document';
+        const el = safe$('#pdf-title');
+        if (el) el.textContent = state.activeProject.pdf_filename || state.activeProject.name || 'Document';
     }
 }
 
 function clearAll() {
-    $('#messages-main').innerHTML = '<div class="empty-state"><p>🤖 Main AI</p><p class="sub">Upload a PDF to start</p></div>';
-    $('#messages-explainer').innerHTML = '<div class="empty-state"><p>🔍 Explainer AI</p><p class="sub">Upload a PDF to start</p></div>';
-    $('#pdf-viewer').classList.remove('hidden');
-    $('#read-mode').classList.add('hidden');
-    $('#pdf-empty').classList.remove('hidden');
-    $('#pdf-canvas-container').innerHTML = '';
-    $('#read-mode-content').innerHTML = '';
-    $('#pdf-title').textContent = 'No document';
-    $('#page-indicator').textContent = '';
-    $('#zoom-level').textContent = '100%';
-    state.pdfDoc = null;
-    state.pdfPages = [];
-    state.pdfScale = 1.5;
-    state.pdfScrollTop = 0;
-    state.pdfScrollLeft = 0;
-}
-
-// ═══════════════════════════════════════════════════════
-// PDF RENDERING (NO CSS TRANSFORM — text layer stays aligned)
-// ═══════════════════════════════════════════════════════
-function savePDFScroll() {
-    const viewer = $('#pdf-viewer');
-    if (viewer) {
-        state.pdfScrollTop = viewer.scrollTop;
-        state.pdfScrollLeft = viewer.scrollLeft;
+    const mm = safe$('#messages-main'), me = safe$('#messages-explainer');
+    if (mm) mm.innerHTML = '<div class="empty-state"><p>🤖 Main AI</p><p class="sub">Ask a question</p></div>';
+    if (me) me.innerHTML = '<div class="empty-state"><p>🔍 Explainer AI</p><p class="sub">Explains concepts</p></div>';
+    const iframe = safe$('#pdf-iframe'), rm = safe$('#read-mode'), empty = safe$('#pdf-empty');
+    if (iframe) {
+        iframe.style.display = 'none';
+        delete iframe.dataset.filename;
     }
+    if (rm) rm.classList.add('hidden');
+    if (empty) empty.classList.remove('hidden');
+    const rmc = safe$('#read-mode-content'); if (rmc) rmc.innerHTML = '';
+    const pt = safe$('#pdf-title'); if (pt) pt.textContent = 'No document';
+    state.activeProject = null;
+    state.selectedText = '';
+    state.selectedContext = '';
+    state.selectedAt = 0;
 }
 
-function restorePDFScroll() {
-    const viewer = $('#pdf-viewer');
-    if (viewer) {
-        requestAnimationFrame(() => {
-            viewer.scrollTop = state.pdfScrollTop;
-            viewer.scrollLeft = state.pdfScrollLeft;
-        });
-    }
-}
-
+// ═══════════ PDF RENDERING ═══════════
 function renderPDFContent() {
+    state.selectedText = '';
+    state.selectedContext = '';
+    state.selectedAt = 0;
+
     if (!state.activeProject || !state.activeProject.pdf_filename) {
-        $('#pdf-viewer').classList.add('hidden');
-        $('#read-mode').classList.add('hidden');
-        $('#pdf-empty').classList.remove('hidden');
+        const iframe = safe$('#pdf-iframe'), rm = safe$('#read-mode'), empty = safe$('#pdf-empty');
+        if (iframe) {
+            iframe.style.display = 'none';
+            delete iframe.dataset.filename;
+        }
+        if (rm) rm.classList.add('hidden');
+        if (empty) empty.classList.remove('hidden');
         return;
     }
-    $('#pdf-empty').classList.add('hidden');
+    const empty = safe$('#pdf-empty'); if (empty) empty.classList.add('hidden');
     updatePDFTitle();
-    if (state.pdfMode === 'pdf') renderPDFView();
-    else renderReadMode();
-}
 
-async function renderPDFView() {
-    savePDFScroll(); // Remember scroll position
-
-    $('#pdf-viewer').classList.remove('hidden');
-    $('#read-mode').classList.add('hidden');
-    const container = $('#pdf-canvas-container');
-    container.innerHTML = '<div class="empty-state"><p>⏳ Rendering PDF...</p></div>';
-
-    const filename = state.activeProject.pdf_filename;
-    const url = `/api/pdf-file/${encodeURIComponent(filename)}`;
-
-    try {
-        const loadingTask = pdfjsLib.getDocument(url);
-        state.pdfDoc = await loadingTask.promise;
-        container.innerHTML = '';
-        state.pdfPages = [];
-
-        for (let i = 1; i <= state.pdfDoc.numPages; i++) {
-            const page = await state.pdfDoc.getPage(i);
-            const viewport = page.getViewport({ scale: state.pdfScale });
-
-            const wrapper = document.createElement('div');
-            wrapper.className = 'pdf-page-wrapper';
-            wrapper.style.width = viewport.width + 'px';
-            wrapper.style.height = viewport.height + 'px';
-            wrapper.dataset.page = i;
-
-            // Canvas
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            canvas.style.width = viewport.width + 'px';
-            canvas.style.height = viewport.height + 'px';
-            wrapper.appendChild(canvas);
-
-            const ctx = canvas.getContext('2d');
-            await page.render({ canvasContext: ctx, viewport }).promise;
-
-            // Text layer — rendered at EXACT viewport scale, no CSS transform
-            const textLayerDiv = document.createElement('div');
-            textLayerDiv.className = 'pdf-text-layer';
-            textLayerDiv.style.width = viewport.width + 'px';
-            textLayerDiv.style.height = viewport.height + 'px';
-            textLayerDiv.dataset.page = i;
-            wrapper.appendChild(textLayerDiv);
-
-            const textContent = await page.getTextContent();
-            const textLayer = pdfjsLib.renderTextLayer({
-                textContentSource: textContent,
-                container: textLayerDiv,
-                viewport: viewport,
-                textDivs: [],
-            });
-            await textLayer.promise;
-
-            container.appendChild(wrapper);
-            state.pdfPages.push({ page, viewport, wrapper, textLayerDiv, textContent });
+    if (state.readMode) {
+        const iframe = safe$('#pdf-iframe'); if (iframe) iframe.style.display = 'none';
+        renderReadMode();
+    } else {
+        const rm = safe$('#read-mode'); if (rm) rm.classList.add('hidden');
+        const filename = state.activeProject.pdf_filename;
+        const iframe = safe$('#pdf-iframe');
+        if (iframe) {
+            const pdfPath = `/api/pdf-file/${encodeURIComponent(filename)}`;
+            const pdfUrl = new URL(pdfPath, window.location.href).href;
+            if (iframe.dataset.filename !== filename || iframe.src !== pdfUrl) {
+                iframe.dataset.filename = filename;
+                iframe.src = pdfPath;
+            }
+            iframe.style.display = 'block';
         }
-
-        $('#page-indicator').textContent = `1/${state.pdfDoc.numPages}`;
-        updateZoomLabel();
-        restorePDFScroll(); // Restore scroll position after render
-    } catch(e) {
-        console.error('PDF render:', e);
-        container.innerHTML = `<div class="empty-state"><p>❌ Failed to render PDF</p><p class="sub">${escHtml(e.message)}</p></div>`;
     }
 }
 
-async function renderReadMode() {
-    $('#pdf-viewer').classList.add('hidden');
-    $('#read-mode').classList.remove('hidden');
+function toggleReadMode() {
+    state.readMode = !state.readMode;
+    const btn = safe$('#btn-toggle-readmode');
+    if (btn) btn.textContent = state.readMode ? '📄 PDF View' : '📝 Text Mode';
+    hideSelectionPopover();
+    renderPDFContent();
+    if (!state.readMode) reHookAfterModeChange();
+}
 
+// ═══════════ READ MODE ═══════════
+async function renderReadMode() {
+    const rm = safe$('#read-mode'); if (rm) rm.classList.remove('hidden');
     try {
         const res = await fetch(`/api/pdf-context/${state.activeProjectId}`);
         const d = await res.json();
         const text = d.exists ? d.text : 'No text available.';
         const lines = text.split('\n');
-        let html = '';
-        let inPara = false;
-
+        let html = ''; let inPara = false;
         for (const line of lines) {
             if (line.match(/^\[Page \d+\]$/)) {
                 if (inPara) { html += '</div>'; inPara = false; }
                 html += `<span class="page-marker">${escHtml(line)}</span>`;
                 continue;
             }
-            if (line.trim() === '') {
-                if (inPara) { html += '</div>'; inPara = false; }
-                continue;
-            }
-            if (!inPara) { html += '<div class="pdf-paragraph">'; inPara = true; }
-            else { html += ' '; }
-
-            const tokens = tokenize(line);
-            html += tokens.map(t => {
-                if (t.type === 'word') return `<span class="clickable-word" data-word="${escHtml(t.value)}">${escHtml(t.value)}</span>`;
-                return escHtml(t.value);
-            }).join('');
+            if (line.trim() === '') { if (inPara) { html += '</div>'; inPara = false; } continue; }
+            if (!inPara) { html += '<div class="pdf-paragraph">'; inPara = true; } else { html += ' '; }
+            html += tokenize(line).map(t => t.type === 'word' ? `<span class="clickable-word" data-word="${escHtml(t.value)}">${escHtml(t.value)}</span>` : escHtml(t.value)).join('');
         }
         if (inPara) html += '</div>';
-
-        $('#read-mode-content').innerHTML = html;
-
-        $('#read-mode-content').querySelectorAll('.clickable-word').forEach(el => {
-            el.addEventListener('contextmenu', (e) => handleReadModeContextMenu(e, el));
-        });
+        const rmc = safe$('#read-mode-content');
+        if (rmc) {
+            rmc.innerHTML = html;
+            rmc.querySelectorAll('.clickable-word').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    const word = el.dataset.word;
+                    const ctx = extractContext(el);
+                    state.activeWord = { word, contextSentence: ctx };
+                    hideSelectionPopover();
+                    explainWordDirectly(word, ctx);
+                });
+            });
+        }
     } catch(e) {
-        $('#read-mode-content').innerHTML = '<div class="empty-state"><p>❌ Failed to load text</p></div>';
+        const rmc = safe$('#read-mode-content');
+        if (rmc) rmc.innerHTML = '<div class="empty-state"><p>❌ Failed</p></div>';
     }
 }
 
-// ═══════════════════════════════════════════════════════
-// PDF ZOOM — No CSS transform, always re-render at real scale
-// ═══════════════════════════════════════════════════════
-function zoomIn() {
-    state.pdfScale = Math.min(4.0, state.pdfScale + 0.25);
-    state.pdfScale = Math.round(state.pdfScale * 100) / 100;
-    if (state.pdfDoc && state.pdfMode === 'pdf') renderPDFView();
+function extractContext(el) {
+    const p = el.closest('.pdf-paragraph');
+    if (!p) return el.dataset.word;
+    const ft = p.textContent;
+    const idx = ft.indexOf(el.dataset.word);
+    if (idx === -1) return el.dataset.word;
+    return ft.substring(Math.max(0, idx - 80), Math.min(ft.length, idx + el.dataset.word.length + 80)).trim();
 }
 
-function zoomOut() {
-    state.pdfScale = Math.max(0.5, state.pdfScale - 0.25);
-    state.pdfScale = Math.round(state.pdfScale * 100) / 100;
-    if (state.pdfDoc && state.pdfMode === 'pdf') renderPDFView();
-}
-
-function zoomFit() {
-    const panel = $('#pdf-content');
-    const width = panel.clientWidth - 40;
-    if (state.pdfDoc && state.pdfPages.length > 0) {
-        state.pdfScale = width / state.pdfPages[0].viewport.width;
-        state.pdfScale = Math.round(state.pdfScale * 100) / 100;
-    } else {
-        state.pdfScale = 1.5;
-    }
-    if (state.pdfDoc && state.pdfMode === 'pdf') renderPDFView();
-}
-
-function updateZoomLabel() {
-    $('#zoom-level').textContent = Math.round(state.pdfScale * 100) + '%';
-}
-
-function togglePDFMode() {
-    state.pdfMode = state.pdfMode === 'pdf' ? 'read' : 'pdf';
-    $('#btn-pdf-mode').textContent = state.pdfMode === 'pdf' ? '👁️ Read Mode' : '📄 PDF View';
-    renderPDFContent();
-}
-
-function toggleDictionary() {
-    state.dictionaryOn = !state.dictionaryOn;
-    const btn = $('#btn-dictionary');
-    if (state.dictionaryOn) {
-        btn.textContent = '🃏 Dict ON';
-        btn.classList.add('active');
-    } else {
-        btn.textContent = '🃏 Dict OFF';
-        btn.classList.remove('active');
-    }
-}
-
-// ═══════════════════════════════════════════════════════
-// TEXT SELECTION + FLOATING EXPLAIN BUTTON
-// ═══════════════════════════════════════════════════════
-function setupTextSelectionHandling() {
-    const explainBtn = document.createElement('button');
-    explainBtn.id = 'selection-explain-btn';
-    explainBtn.innerHTML = '💡 Explain';
-    document.body.appendChild(explainBtn);
-
-    explainBtn.addEventListener('click', async () => {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-        const word = sel.toString().trim();
-
-        const range = sel.getRangeAt(0);
-        const container = range.commonAncestorContainer;
-        const parentEl = container.nodeType === 3 ? container.parentElement : container;
-        const contextText = parentEl ? parentEl.textContent || '' : '';
-        const wordIdx = contextText.indexOf(word);
-        const start = Math.max(0, wordIdx - 60);
-        const end = Math.min(contextText.length, wordIdx + word.length + 60);
-        const contextSentence = contextText.substring(start, end).trim();
-
-        state.activeWord = { word, contextSentence, source: 'pdf' };
-        explainBtn.classList.remove('visible');
-        await explainSelectedWord();
-    });
-
-    document.addEventListener('mouseup', (e) => {
-        setTimeout(() => {
-            const sel = window.getSelection();
-            const selectedText = sel ? sel.toString().trim() : '';
-
-            if (selectedText && state.dictionaryOn) {
-                const pdfPanel = $('#pdf-content');
-                if (sel.rangeCount === 0) { explainBtn.classList.remove('visible'); return; }
-                const range = sel.getRangeAt(0);
-                if (pdfPanel.contains(range.commonAncestorContainer)) {
-                    const rect = range.getBoundingClientRect();
-                    if (rect && rect.width > 0) {
-                        explainBtn.style.left = (rect.right + 8) + 'px';
-                        explainBtn.style.top = (rect.top - 36) + 'px';
-                        const bw = explainBtn.offsetWidth || 120;
-                        if (parseFloat(explainBtn.style.left) + bw > window.innerWidth) {
-                            explainBtn.style.left = (rect.left - bw - 8) + 'px';
-                        }
-                        if (parseFloat(explainBtn.style.top) < 50) {
-                            explainBtn.style.top = (rect.bottom + 8) + 'px';
-                        }
-                        explainBtn.classList.add('visible');
-                    }
-                } else {
-                    explainBtn.classList.remove('visible');
-                }
-            } else {
-                explainBtn.classList.remove('visible');
-            }
-        }, 10);
-    });
-
-    document.addEventListener('mousedown', (e) => {
-        if (e.target !== explainBtn) {
-            explainBtn.classList.remove('visible');
-        }
-    });
-}
-
-// ═══════════════════════════════════════════════════════
-// RIGHT-CLICK CONTEXT MENU
-// ═══════════════════════════════════════════════════════
-function setupContextMenu() {
-    document.addEventListener('click', (e) => {
-        if (!$('#context-menu').contains(e.target)) {
-            $('#context-menu').classList.add('hidden');
-        }
-    });
-
-    $('#ctx-explain').addEventListener('click', explainSelectedWord);
-    $('#ctx-copy').addEventListener('click', () => {
-        if (state.activeWord) {
-            navigator.clipboard.writeText(state.activeWord.word);
-            showToast('📋 Copied!', 'success');
-        }
-        $('#context-menu').classList.add('hidden');
-    });
-    $('#ctx-cancel').addEventListener('click', () => {
-        $('#context-menu').classList.add('hidden');
-    });
-    $('#explain-close').addEventListener('click', () => {
-        $('#explain-result').classList.add('hidden');
-    });
-    $('#explain-result').addEventListener('click', function(e) {
-        if (e.target === this) this.classList.add('hidden');
-    });
-}
-
-function handlePDFContextMenu(e, word, textContent, pageNum) {
-    if (!state.dictionaryOn) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const sel = window.getSelection();
-    const selectedText = sel ? sel.toString().trim() : '';
-    let useWord = word;
-    let useContext = buildContextSentence(
-        textContent.items.filter(it => it.str && it.str.trim()), word
-    );
-
-    if (selectedText && selectedText.length > 0) {
-        useWord = selectedText;
-        useContext = selectedText;
-    }
-
-    state.activeWord = { word: useWord, contextSentence: useContext, element: e.target, source: 'pdf' };
-    showContextMenu(e, useWord, useContext);
-}
-
-function handleReadModeContextMenu(e, el) {
-    if (!state.dictionaryOn) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const word = el.dataset.word;
-    const contextSentence = extractContextSentence(el);
-    state.activeWord = { word, contextSentence, element: el, source: 'read' };
-    showContextMenu(e, word, contextSentence);
-}
-
-function buildContextSentence(allWords, targetWord) {
-    const idx = allWords.findIndex(it => it.str === targetWord);
-    if (idx === -1) return targetWord;
-    const start = Math.max(0, idx - 5);
-    const end = Math.min(allWords.length, idx + 6);
-    return allWords.slice(start, end).map(it => it.str).join(' ');
-}
-
-function extractContextSentence(el) {
-    const paragraph = el.closest('.pdf-paragraph');
-    if (!paragraph) return el.dataset.word;
-    const fullText = paragraph.textContent;
-    const wordText = el.dataset.word;
-    const idx = fullText.indexOf(wordText);
-    if (idx === -1) return wordText;
-    const start = Math.max(0, idx - 80);
-    const end = Math.min(fullText.length, idx + wordText.length + 80);
-    return fullText.substring(start, end).trim();
-}
-
-function showContextMenu(e, word, contextSentence) {
-    const menu = $('#context-menu');
-    $('#ctx-word').textContent = word;
-    $('#ctx-context').textContent = `"...${contextSentence}..."`;
-
-    let left = e.clientX + 5;
-    let top = e.clientY + 5;
-    if (left + 250 > window.innerWidth) left = e.clientX - 260;
-    if (top + 180 > window.innerHeight) top = e.clientY - 190;
-    if (left < 5) left = 5;
-    if (top < 5) top = 5;
-
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
-    menu.classList.remove('hidden');
-}
-
-async function explainSelectedWord() {
-    if (!state.activeWord) return;
-    $('#context-menu').classList.add('hidden');
-    $('#selection-explain-btn').classList.remove('visible');
-
-    const result = $('#explain-result');
-    $('#explain-word').textContent = state.activeWord.word;
-    $('#explain-loading').style.display = 'block';
-    $('#explain-explanation').textContent = '';
-    $('#explain-saved').style.display = 'none';
+// ═══════════ EXPLAIN ═══════════
+async function explainWordDirectly(word, contextSentence) {
+    const result = safe$('#explain-result'); if (!result) return;
+    const ew = safe$('#explain-word'), el = safe$('#explain-loading'),
+          ee = safe$('#explain-explanation'), es = safe$('#explain-saved');
+    if (ew) ew.textContent = word;
+    if (el) el.style.display = 'block';
+    if (ee) ee.textContent = '';
+    if (es) es.style.display = 'none';
     result.classList.remove('hidden');
-
-    const convCtx = getConversationContext();
-    const pdfCtx = state.activeProject?.pdf_context || '';
 
     try {
         const res = await fetch('/api/explain-word', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                word: state.activeWord.word,
-                context_sentence: state.activeWord.contextSentence,
-                pdf_context: pdfCtx,
-                conversation_context: convCtx,
+                word, context_sentence: contextSentence,
+                pdf_context: state.activeProject?.pdf_context || '',
+                conversation_context: getConversationContext(),
             }),
         });
         if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
         const d = await res.json();
-        $('#explain-loading').style.display = 'none';
-        $('#explain-explanation').innerHTML = renderMarkdown(d.explanation);
-        $('#explain-saved').style.display = 'block';
+        if (el) el.style.display = 'none';
+        if (ee) ee.innerHTML = renderMarkdown(d.explanation);
+        if (es) es.style.display = 'block';
         await loadWordCards();
-    } catch(e) {
-        $('#explain-loading').style.display = 'none';
-        $('#explain-explanation').textContent = '❌ ' + e.message;
-    }
+    } catch(e) { if (el) el.style.display = 'none'; if (ee) ee.textContent = '❌ ' + e.message; }
 }
 
 function getConversationContext() {
-    const m = $('#messages-main').querySelectorAll('.chat-bubble');
-    const e = $('#messages-explainer').querySelectorAll('.chat-bubble');
-    return [...m, ...e].slice(-4).map(b => b.textContent).join(' | ');
+    const m = safe$('#messages-main'), e = safe$('#messages-explainer');
+    return [...(m?.querySelectorAll('.chat-bubble') || []), ...(e?.querySelectorAll('.chat-bubble') || [])]
+        .slice(-4).map(b => b.textContent).join(' | ');
 }
 
-// ═══════════════════════════════════════════════════════
-// CHAT HISTORY
-// ═══════════════════════════════════════════════════════
+// ═══════════ CHAT ═══════════
 function renderChatHistory() {
     if (!state.activeProject) return;
-
-    const mainEl = $('#messages-main');
-    mainEl.innerHTML = '';
-    if (state.activeProject.main && state.activeProject.main.length > 0) {
-        state.activeProject.main.forEach(t => {
-            addChatBubble(mainEl, t.content, t.role === 'user' ? 'user' : 'ai ai-main');
-        });
-    } else {
-        mainEl.innerHTML = '<div class="empty-state"><p>🤖 Main AI</p><p class="sub">Ask a question about the document</p></div>';
-    }
-    mainEl.scrollTop = mainEl.scrollHeight;
-
-    const expEl = $('#messages-explainer');
-    expEl.innerHTML = '';
-    if (state.activeProject.explainer && state.activeProject.explainer.length > 0) {
-        state.activeProject.explainer.forEach(t => {
-            addChatBubble(expEl, t.content, t.role === 'user' ? 'user' : 'ai ai-explainer');
-        });
-    } else {
-        expEl.innerHTML = '<div class="empty-state"><p>🔍 Explainer AI</p><p class="sub">Your tutor — ask it to explain anything</p></div>';
-    }
-    expEl.scrollTop = expEl.scrollHeight;
+    [['#messages-main', 'main', '🤖 Main AI'], ['#messages-explainer', 'explainer', '🔍 Explainer AI']].forEach(([sel, key, title]) => {
+        const el = safe$(sel); if (!el) return;
+        el.innerHTML = '';
+        const h = state.activeProject[key];
+        const lastAssistantIndex = h?.[h.length - 1]?.role === 'assistant' ? h.length - 1 : -1;
+        if (h && h.length > 0) h.forEach((t, i) => addChatBubble(
+            el,
+            t.content,
+            t.role === 'user' ? 'user' : `ai ai-${key}`,
+            { windowType: key, messageIndex: i, canRegenerate: i === lastAssistantIndex }
+        ));
+        else el.innerHTML = `<div class="empty-state"><p>${title}</p><p class="sub">${key === 'main' ? 'Ask a question' : 'Explains concepts'}</p></div>`;
+        el.scrollTop = el.scrollHeight;
+    });
 }
 
-// ═══════════════════════════════════════════════════════
-// STREAMING CHAT
-// ═══════════════════════════════════════════════════════
-async function sendToAI(windowType) {
-    if (state.streaming.main || state.streaming.explainer) {
-        showToast('⏳ AI is still responding...', 'error'); return;
+function setSendButtonState(windowType, streaming) {
+    const sendBtn = safe$(windowType === 'main' ? '#btn-send-main' : '#btn-send-explainer');
+    if (!sendBtn) return;
+    sendBtn.disabled = false;
+    sendBtn.textContent = streaming ? 'Ⅱ' : '➤';
+    sendBtn.title = streaming ? 'Pause response' : 'Send';
+}
+
+function handleSendButton(windowType) {
+    if (state.streaming[windowType]) {
+        pauseAI(windowType);
+        return;
     }
+    sendToAI(windowType);
+}
+
+function pauseAI(windowType) {
+    const controller = state.abortControllers[windowType];
+    if (controller) {
+        controller.abort();
+        showToast('Paused response', 'success');
+    }
+}
+
+async function regenerateAI(windowType) {
+    if (state.streaming.main || state.streaming.explainer) { showToast('⏳ Pause the current response first', 'error'); return; }
+    const history = state.activeProject?.[windowType] || [];
+    const lastAssistantIndex = history?.[history.length - 1]?.role === 'assistant' ? history.length - 1 : -1;
+    if (lastAssistantIndex === -1) { showToast('No AI response to regenerate', 'error'); return; }
+
+    state.activeProject[windowType] = history.slice(0, lastAssistantIndex);
+    renderChatHistory();
+    await sendToAI(windowType, { regenerate: true });
+}
+
+async function deleteChatMessage(windowType, messageIndex) {
+    if (!state.activeProjectId) return;
+    if (state.streaming.main || state.streaming.explainer) { showToast('Pause the current response first', 'error'); return; }
+    if (!confirm('Delete this message?')) return;
+
+    try {
+        const res = await fetch(`/api/projects/${state.activeProjectId}/chat/${windowType}/${messageIndex}`, { method: 'DELETE' });
+        if (!res.ok) { const err = await res.json().catch(()=>({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+        await loadActiveProject();
+        showToast('Message deleted', 'success');
+    } catch(e) {
+        showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+
+async function sendToAI(windowType, options = {}) {
+    const isRegenerate = !!options.regenerate;
+    if (state.streaming.main || state.streaming.explainer) { showToast('⏳ AI still responding...', 'error'); return; }
     if (!state.activeProjectId) { showToast('📄 Upload a PDF first', 'error'); return; }
 
-    const inputEl = windowType === 'main' ? $('#input-main') : $('#input-explainer');
-    const messagesEl = windowType === 'main' ? $('#messages-main') : $('#messages-explainer');
-    const sendBtn = windowType === 'main' ? $('#btn-send-main') : $('#btn-send-explainer');
-    const message = inputEl.value.trim();
+    const inputEl = safe$(windowType === 'main' ? '#input-main' : '#input-explainer');
+    const messagesEl = safe$(windowType === 'main' ? '#messages-main' : '#messages-explainer');
+    const sendBtn = safe$(windowType === 'main' ? '#btn-send-main' : '#btn-send-explainer');
+    if (!inputEl || !messagesEl || !sendBtn) return;
+    const message = isRegenerate
+        ? [...(state.activeProject?.[windowType] || [])].reverse().find(t => t.role === 'user')?.content || ''
+        : inputEl.value.trim();
     if (!message) return;
 
-    const es = messagesEl.querySelector('.empty-state');
-    if (es) es.remove();
-
-    addChatBubble(messagesEl, message, 'user');
-    inputEl.value = ''; inputEl.style.height = 'auto';
-    sendBtn.disabled = true;
+    const es = messagesEl.querySelector('.empty-state'); if (es) es.remove();
+    if (!isRegenerate) {
+        addChatBubble(messagesEl, message, 'user');
+        inputEl.value = ''; inputEl.style.height = 'auto';
+    }
     state.streaming[windowType] = true;
+    const controller = new AbortController();
+    state.abortControllers[windowType] = controller;
+    setSendButtonState(windowType, true);
 
     const bubbleClass = windowType === 'main' ? 'ai ai-main' : 'ai ai-explainer';
     const label = windowType === 'main' ? 'Main AI' : 'Explainer AI';
-    const streamBubble = document.createElement('div');
-    streamBubble.className = `chat-bubble ${bubbleClass}`;
-    streamBubble.innerHTML = `<div class="bubble-label">${label}</div><div class="bubble-text markdown-body"><span class="streaming-content"></span><span class="streaming-cursor"></span></div>`;
-    messagesEl.appendChild(streamBubble);
-    scrollToBottom(messagesEl);
+    const sb = document.createElement('div'); sb.className = `chat-bubble ${bubbleClass}`;
+    sb.innerHTML = `<div class="bubble-label">${label}</div><div class="bubble-text markdown-body"><span class="streaming-content"></span><span class="streaming-cursor"></span></div>`;
+    messagesEl.appendChild(sb); messagesEl.scrollTop = messagesEl.scrollHeight;
 
-    const contentSpan = streamBubble.querySelector('.streaming-content');
-    const cursorSpan = streamBubble.querySelector('.streaming-cursor');
-    let fullText = '';
+    const cs = sb.querySelector('.streaming-content'), cursor = sb.querySelector('.streaming-cursor');
+    let full = '';
 
     try {
         const endpoint = windowType === 'main' ? '/api/chat/main/stream' : '/api/chat/explainer/stream';
         const res = await fetch(endpoint, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, project_id: state.activeProjectId }),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({ message, project_id: state.activeProjectId, regenerate: isRegenerate }),
         });
         if (!res.ok) { const err = await res.json().catch(()=>({})); throw new Error(err.detail || `HTTP ${res.status}`); }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split('\n'); buf = lines.pop() || '';
             for (const line of lines) {
-                const t = line.trim();
-                if (t.startsWith('data: ')) {
+                if (line.startsWith('data: ')) {
                     try {
-                        const d = JSON.parse(t.slice(6));
-                        if (d.token) {
-                            fullText += d.token;
-                            contentSpan.innerHTML = renderMarkdown(fullText);
-                            scrollToBottom(messagesEl);
-                        } else if (d.done) {
-                            cursorSpan.remove();
-                        } else if (d.error) {
-                            contentSpan.textContent = '❌ ' + d.error;
-                            cursorSpan.remove();
-                            streamBubble.classList.add('error');
-                        }
+                        const d = JSON.parse(line.slice(6));
+                        if (d.token) { full += d.token; if (cs) cs.innerHTML = renderMarkdown(full); messagesEl.scrollTop = messagesEl.scrollHeight; }
+                        else if (d.done) { if (cursor) cursor.remove(); }
+                        else if (d.error) { if (cs) cs.textContent = '❌ ' + d.error; if (cursor) cursor.remove(); sb.classList.add('error'); }
                     } catch(pe) {}
                 }
             }
         }
-
         const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        streamBubble.querySelector('.bubble-text').innerHTML = renderMarkdown(fullText);
-        const timeEl = document.createElement('div');
-        timeEl.className = 'bubble-time'; timeEl.textContent = time;
-        streamBubble.appendChild(timeEl);
-
+        const bt = sb.querySelector('.bubble-text'); if (bt) bt.innerHTML = renderMarkdown(full);
+        const timeEl = document.createElement('div'); timeEl.className = 'bubble-time'; timeEl.textContent = time;
+        sb.appendChild(timeEl);
         await loadActiveProject();
     } catch(e) {
-        streamBubble.querySelector('.bubble-text').textContent = '❌ Error: ' + e.message;
-        streamBubble.classList.add('error');
-        if (cursorSpan) cursorSpan.remove();
+        if (e.name === 'AbortError') {
+            if (cursor) cursor.remove();
+            const bt = sb.querySelector('.bubble-text');
+            if (bt) bt.innerHTML = full ? `${renderMarkdown(full)}<p class="paused-note">Paused</p>` : '<span class="paused-note">Paused before any text arrived.</span>';
+            sb.classList.add('paused');
+        } else {
+            const bt = sb.querySelector('.bubble-text'); if (bt) bt.textContent = '❌ Error: ' + e.message;
+            sb.classList.add('error'); if (cursor) cursor.remove();
+            if (isRegenerate) await loadActiveProject();
+        }
     } finally {
         state.streaming[windowType] = false;
-        sendBtn.disabled = false;
+        state.abortControllers[windowType] = null;
+        setSendButtonState(windowType, false);
         inputEl.focus();
     }
 }
 
-function addChatBubble(container, text, type) {
-    const bubble = document.createElement('div');
-    bubble.className = `chat-bubble ${type}`;
+function addChatBubble(container, text, type, options = {}) {
+    const bubble = document.createElement('div'); bubble.className = `chat-bubble ${type}`;
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    let label = '';
-    if (type === 'ai ai-main') label = 'Main AI';
-    else if (type === 'ai ai-explainer') label = 'Explainer AI';
-    else if (type === 'user') label = 'You';
-
-    const content = (type === 'user')
-        ? escHtml(text).replace(/\n/g, '<br>')
-        : renderMarkdown(text);
-
-    bubble.innerHTML = `${label ? `<div class="bubble-label">${label}</div>` : ''}<div class="bubble-text markdown-body">${content}</div><div class="bubble-time">${time}</div>`;
+    const labels = { 'ai ai-main': 'Main AI', 'ai ai-explainer': 'Explainer AI', 'user': 'You' };
+    const content = type === 'user' ? escHtml(text).replace(/\n/g, '<br>') : renderMarkdown(text);
+    const canDelete = options.windowType && Number.isInteger(options.messageIndex);
+    const canRegenerate = options.canRegenerate && type.startsWith('ai ');
+    bubble.innerHTML = `
+        ${labels[type] ? `<div class="bubble-label">${labels[type]}</div>` : ''}
+        ${canDelete ? `<div class="bubble-actions">
+            ${canRegenerate ? '<button class="bubble-action btn-regenerate" title="Regenerate response">↻</button>' : ''}
+            <button class="bubble-action btn-delete-message" title="Delete message">×</button>
+        </div>` : ''}
+        <div class="bubble-text markdown-body">${content}</div>
+        <div class="bubble-time">${time}</div>
+    `;
+    if (canDelete) {
+        bubble.querySelector('.btn-delete-message')?.addEventListener('click', () => deleteChatMessage(options.windowType, options.messageIndex));
+        bubble.querySelector('.btn-regenerate')?.addEventListener('click', () => regenerateAI(options.windowType));
+    }
     container.appendChild(bubble);
     return bubble;
 }
 
 function renderMarkdown(text) {
     if (!text) return '';
-    try { return marked.parse(text); } catch(e) { return escHtml(text).replace(/\n/g, '<br>'); }
+    if (typeof marked !== 'undefined') try { return marked.parse(text); } catch(e) {}
+    return escHtml(text).replace(/\n/g, '<br>');
 }
 
-function scrollToBottom(el) { el.scrollTop = el.scrollHeight; }
-
-function escHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function tokenize(text) {
-    const tokens = [];
-    const regex = /([a-zA-Z0-9\u00C0-\u024F\-']+)|([^a-zA-Z0-9\u00C0-\u024F\-']+)/g;
-    let m;
-    while ((m = regex.exec(text)) !== null) {
-        if (m[1]) tokens.push({ type: 'word', value: m[1] });
-        else if (m[2]) tokens.push({ type: 'punct', value: m[2] });
-    }
-    return tokens;
-}
-
-// ═══════════════════════════════════════════════════════
-// PDF UPLOAD
-// ═══════════════════════════════════════════════════════
+// ═══════════ PDF UPLOAD ═══════════
 async function uploadPDF(file) {
     if (!file) return;
-    $('#pdf-empty').classList.add('hidden');
-    $('#pdf-canvas-container').innerHTML = '<div class="empty-state"><p>⏳ Processing PDF...</p></div>';
-    $('#pdf-viewer').classList.remove('hidden');
-    $('#read-mode').classList.add('hidden');
-
-    const fd = new FormData();
-    fd.append('file', file);
+    const empty = safe$('#pdf-empty'), iframe = safe$('#pdf-iframe'), rm = safe$('#read-mode');
+    if (empty) empty.classList.add('hidden');
+    if (iframe) iframe.style.display = 'none';
+    if (rm) rm.classList.add('hidden');
+    const fd = new FormData(); fd.append('file', file);
     try {
         const res = await fetch('/api/upload-pdf', { method: 'POST', body: fd });
         if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
         const d = await res.json();
         await loadProjects();
-        showToast(`✅ "${d.project.name}" loaded (${d.page_count} pages)`, 'success');
-    } catch(e) {
-        showToast(`❌ ${e.message}`, 'error');
-        $('#pdf-canvas-container').innerHTML = '';
-        $('#pdf-empty').classList.remove('hidden');
-    }
+        showToast(`✅ "${d.project.name}" loaded`, 'success');
+    } catch(e) { showToast(`❌ ${e.message}`, 'error'); if (empty) empty.classList.remove('hidden'); }
 }
 
-// ═══════════════════════════════════════════════════════
-// WORD CARDS
-// ═══════════════════════════════════════════════════════
+// ═══════════ WORD CARDS ═══════════
 async function loadWordCards() {
-    try {
-        const res = await fetch('/api/word-cards');
-        state.wordCards = await res.json();
-        renderWordCards();
-    } catch(e) { console.error('Cards:', e); }
+    try { state.wordCards = await (await fetch('/api/word-cards')).json(); renderWordCards(); } catch(e) {}
 }
 
 function renderWordCards() {
-    const list = $('#wordcards-list');
-    const count = $('#card-count');
+    const list = safe$('#wordcards-list'), count = safe$('#card-count');
+    if (!list) return;
     if (state.wordCards.length === 0) {
-        list.innerHTML = '<p class="empty-state sub">Select text → Explain to create cards</p>';
-        count.textContent = '0';
-        return;
+        list.innerHTML = '<p class="empty-state sub">Select text in PDF → click 💡 Explain</p>';
+        if (count) count.textContent = '0'; return;
     }
-    count.textContent = state.wordCards.length;
+    if (count) count.textContent = state.wordCards.length;
     list.innerHTML = state.wordCards.slice().reverse().map(c => `
-        <div class="wordcard-item" data-id="${c.id}">
-            <button class="wc-delete" onclick="deleteWordCard(${c.id})">🗑️</button>
-            <div class="wc-word">${escHtml(c.word)}</div>
-            <div class="wc-context">"...${escHtml(c.context_sentence)}..."</div>
-            <div class="wc-explanation markdown-body">${renderMarkdown(c.explanation)}</div>
-        </div>
+        <div class="wordcard-item"><button class="wc-delete" data-id="${c.id}">🗑️</button>
+        <div class="wc-word">${escHtml(c.word)}</div>
+        <div class="wc-context">"...${escHtml(c.context_sentence)}..."</div>
+        <div class="wc-explanation markdown-body">${renderMarkdown(c.explanation)}</div></div>
     `).join('');
+    list.querySelectorAll('.wc-delete').forEach(btn => btn.addEventListener('click', () => deleteWordCard(parseInt(btn.dataset.id))));
 }
 
-async function deleteWordCard(id) {
-    try {
-        await fetch(`/api/word-cards/${id}`, { method: 'DELETE' });
-        await loadWordCards();
-    } catch(e) { showToast('Failed', 'error'); }
-}
+async function deleteWordCard(id) { try { await fetch(`/api/word-cards/${id}`, { method: 'DELETE' }); await loadWordCards(); } catch(e) {} }
+function toggleWordCards() { const p = safe$('#wordcards-panel'); if (p) p.classList.toggle('hidden'); }
 
-function toggleWordCards() {
-    $('#wordcards-panel').classList.toggle('open');
-}
-
-// ═══════════════════════════════════════════════════════
-// PANELS & DIVIDERS
-// ═══════════════════════════════════════════════════════
-function togglePanel(pid) {
-    const panel = document.getElementById(pid);
-    const btn = panel.querySelector('.btn-minimize');
-    if (panel.classList.contains('collapsed')) {
-        panel.classList.remove('collapsed');
-        btn.textContent = '−';
+// ═══════════ CHAT MINIMIZE ═══════════
+function toggleChatMinimize() {
+    state.chatMinimized = !state.chatMinimized;
+    const section = safe$('#chat-section'), btn = safe$('#btn-minimize-chat');
+    const pdfSection = safe$('#pdf-section'), divider = safe$('#main-divider');
+    if (!section || !btn) return;
+    if (state.chatMinimized) {
+        section.classList.add('collapsed');
+        btn.textContent = '▲';
+        if (pdfSection) pdfSection.style.flex = '1 1 auto';
+        if (divider) divider.style.display = 'none';
     } else {
-        panel.classList.add('collapsed');
-        btn.textContent = '+';
+        section.classList.remove('collapsed');
+        btn.textContent = '▼';
+        if (pdfSection) pdfSection.style.flex = '0 1 55%';
+        if (divider) divider.style.display = '';
+        section.style.flex = '0 0 45%';
     }
 }
 
-function toggleLayout() {
-    state.layout = state.layout === 'horizontal' ? 'vertical' : 'horizontal';
-    updateLayoutUI();
-    fetch('/api/settings', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ layout: state.layout }),
-    }).catch(() => {});
+// ═══════════ DIVIDERS ═══════════
+function startResizeDrag(e, divider, resizeClass, updateSize) {
+    if (e.button !== undefined && e.button !== 0) return;
+
+    e.preventDefault();
+    state.isResizing = true;
+    divider.classList.add('active');
+    document.body.classList.add('resizing', resizeClass);
+    try { divider.setPointerCapture?.(e.pointerId); } catch(e) {}
+
+    let rafId = null;
+    let latestEvent = e;
+
+    function applyResize() {
+        rafId = null;
+        updateSize(latestEvent);
+    }
+
+    function move(ev) {
+        if (!state.isResizing) return;
+        latestEvent = ev;
+        if (rafId === null) rafId = requestAnimationFrame(applyResize);
+    }
+
+    function up(ev) {
+        state.isResizing = false;
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            updateSize(latestEvent);
+        }
+        try {
+            if (divider.hasPointerCapture?.(ev.pointerId)) divider.releasePointerCapture(ev.pointerId);
+        } catch(e) {}
+        divider.classList.remove('active');
+        document.body.classList.remove('resizing', resizeClass);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+    }
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
 }
 
 function setupDividers() {
-    $$('.divider').forEach(divider => {
-        divider.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            state.isResizing = true;
-            divider.classList.add('active');
-
-            const isH = state.layout === 'horizontal';
-            const [pLeft, pRight] = getAdjacentPanels(divider);
-
-            const rLeft = pLeft.getBoundingClientRect();
-            const rRight = pRight.getBoundingClientRect();
-            const startSizeLeft = isH ? rLeft.width : rLeft.height;
-            const startSizeRight = isH ? rRight.width : rRight.height;
-            const totalBoth = startSizeLeft + startSizeRight;
-            const startPos = isH ? e.clientX : e.clientY;
-
-            function mv(ev) {
-                if (!state.isResizing) return;
-                const cur = isH ? ev.clientX : ev.clientY;
-                const delta = cur - startPos;
-                const newL = Math.max(200, startSizeLeft + delta);
-                const newR = Math.max(200, startSizeRight - delta);
-                if (newL < 200 || newR < 200) return;
-
-                pLeft.style.flex = `0 1 ${(newL / totalBoth) * 100}%`;
-                pRight.style.flex = `0 1 ${(newR / totalBoth) * 100}%`;
-            }
-
-            function up() {
-                state.isResizing = false;
-                divider.classList.remove('active');
-                document.removeEventListener('mousemove', mv);
-                document.removeEventListener('mouseup', up);
-            }
-
-            document.addEventListener('mousemove', mv);
-            document.addEventListener('mouseup', up);
+    const mainDiv = safe$('#main-divider');
+    if (mainDiv) {
+        mainDiv.addEventListener('pointerdown', (e) => {
+            if (state.chatMinimized) return;
+            const pdfS = safe$('#pdf-section'), chatS = safe$('#chat-section');
+            const mainArea = safe$('#main-area');
+            if (!pdfS || !chatS || !mainArea) return;
+            const containerH = mainArea.getBoundingClientRect().height;
+            if (containerH <= 0) return;
+            const startY = e.clientY;
+            const startPdfH = pdfS.getBoundingClientRect().height;
+            const minSectionH = Math.min(100, containerH / 2);
+            startResizeDrag(e, mainDiv, 'resizing-main', (ev) => {
+                const dy = ev.clientY - startY;
+                const maxPdfH = containerH - minSectionH;
+                const newPdfH = Math.min(Math.max(minSectionH, startPdfH + dy), maxPdfH);
+                const newChatH = containerH - newPdfH;
+                pdfS.style.flex = `0 1 ${(newPdfH / containerH) * 100}%`;
+                chatS.style.flex = `0 0 ${(newChatH / containerH) * 100}%`;
+            });
         });
-    });
-}
+    }
 
-function getAdjacentPanels(divider) {
-    const panels = [...$('#main-container').querySelectorAll('.panel')];
-    const dividers = [...$('#main-container').querySelectorAll('.divider')];
-    const idx = dividers.indexOf(divider);
-    return [panels[idx], panels[idx + 1]];
+    const chatDiv = safe$('#chat-divider');
+    if (chatDiv) {
+        chatDiv.addEventListener('pointerdown', (e) => {
+            const mainP = safe$('#chat-panel-main'), expP = safe$('#chat-panel-explainer');
+            const chatContent = safe$('#chat-section-content');
+            if (!mainP || !expP || !chatContent) return;
+            const containerW = chatContent.getBoundingClientRect().width;
+            if (containerW <= 0) return;
+            const startX = e.clientX;
+            const startMainW = mainP.getBoundingClientRect().width;
+            const minPanelW = Math.min(200, containerW / 2);
+            startResizeDrag(e, chatDiv, 'resizing-chat', (ev) => {
+                const dx = ev.clientX - startX;
+                const maxMainW = containerW - minPanelW;
+                const newMainW = Math.min(Math.max(minPanelW, startMainW + dx), maxMainW);
+                const newExpW = containerW - newMainW;
+                mainP.style.flex = `0 1 ${(newMainW / containerW) * 100}%`;
+                expP.style.flex = `0 1 ${(newExpW / containerW) * 100}%`;
+            });
+        });
+    }
 }
 
 function setupDragDrop() {
     document.addEventListener('dragover', e => e.preventDefault());
-    document.addEventListener('drop', e => {
-        e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (file && file.name.endsWith('.pdf')) uploadPDF(file);
-    });
+    document.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.name.endsWith('.pdf')) uploadPDF(f); });
 }
 
-// ═══════════════════════════════════════════════════════
-// EVENT LISTENERS
-// ═══════════════════════════════════════════════════════
+// ═══════════ EVENT LISTENERS ═══════════
 function setupEventListeners() {
-    $('#btn-upload').addEventListener('click', () => $('#file-input').click());
-    $('#file-input').addEventListener('change', e => { if (e.target.files[0]) uploadPDF(e.target.files[0]); });
-    $('#btn-pdf-mode').addEventListener('click', togglePDFMode);
-    $('#btn-dictionary').addEventListener('click', toggleDictionary);
-    $('#btn-layout').addEventListener('click', toggleLayout);
-    $('#btn-wordcards').addEventListener('click', toggleWordCards);
-    $('#btn-wordcards-close').addEventListener('click', () => $('#wordcards-panel').classList.remove('open'));
-    $('#project-select').addEventListener('change', e => switchProject(e.target.value));
-    $('#btn-delete-project').addEventListener('click', deleteProject);
+    function on(el, ev, fn) { if (el) el.addEventListener(ev, fn); }
 
-    // Zoom
-    $('#btn-zoom-in').addEventListener('click', zoomIn);
-    $('#btn-zoom-out').addEventListener('click', zoomOut);
-    $('#btn-zoom-fit').addEventListener('click', zoomFit);
+    on(safe$('#sidebar-toggle'), 'click', toggleSidebar);
+    on(safe$('#btn-upload-sidebar'), 'click', () => { const fi = safe$('#file-input'); if (fi) fi.click(); collapseSidebar(); });
+    on(safe$('#file-input'), 'change', e => { if (e.target.files[0]) uploadPDF(e.target.files[0]); });
+    on(safe$('#btn-toggle-readmode'), 'click', toggleReadMode);
+    on(safe$('#btn-explain-selection'), 'pointerdown', e => {
+        e.preventDefault();
+        cachePDFSelection(true);
+    });
+    on(safe$('#btn-explain-selection'), 'click', () => explainPDFSelection({ preferClipboard: true }));
+    on(safe$('#btn-selection-popover-explain'), 'click', () => explainPDFSelection());
+    on(safe$('#btn-wordcards'), 'click', toggleWordCards);
+    on(safe$('#btn-wordcards-close'), 'click', () => { const p = safe$('#wordcards-panel'); if (p) p.classList.add('hidden'); });
+    on(safe$('#btn-minimize-chat'), 'click', toggleChatMinimize);
+    on(safe$('#explain-close'), 'click', () => { const r = safe$('#explain-result'); if (r) r.classList.add('hidden'); });
+    on(safe$('#explain-result'), 'click', function(e) { if (e.target === this) this.classList.add('hidden'); });
 
-    // Settings
-    $('#btn-settings').addEventListener('click', () => $('#settings-overlay').classList.remove('hidden'));
-    $('#btn-settings-close').addEventListener('click', () => $('#settings-overlay').classList.add('hidden'));
-    $('#settings-overlay').addEventListener('click', e => { if (e.target === $('#settings-overlay')) $('#settings-overlay').classList.add('hidden'); });
-    $('#btn-save-settings').addEventListener('click', saveSettings);
-    $('#main-model-select').addEventListener('change', updateModelBadges);
-    $('#explainer-model-select').addEventListener('change', updateModelBadges);
+    on(safe$('#btn-settings-sidebar'), 'click', () => { const o = safe$('#settings-overlay'); if (o) o.classList.remove('hidden'); });
+    on(safe$('#btn-settings-close'), 'click', () => { const o = safe$('#settings-overlay'); if (o) o.classList.add('hidden'); });
+    let settingsBackdropDown = false;
+    on(safe$('#settings-overlay'), 'pointerdown', function(e) { settingsBackdropDown = e.target === this; });
+    on(safe$('#settings-overlay'), 'click', function(e) {
+        if (settingsBackdropDown && e.target === this && !window.getSelection()?.toString()) this.classList.add('hidden');
+        settingsBackdropDown = false;
+    });
+    on(safe$('#btn-save-settings'), 'click', saveSettings);
+    on(safe$('#provider-select'), 'change', e => applyProviderPreset(e.target.value, true));
+    on(safe$('#main-model-select'), 'focus', e => { e.target.dataset.previousValue = e.target.value; });
+    on(safe$('#main-model-select'), 'change', e => handleModelSelectChange(e.target));
+    on(safe$('#explainer-model-select'), 'focus', e => { e.target.dataset.previousValue = e.target.value; });
+    on(safe$('#explainer-model-select'), 'change', e => handleModelSelectChange(e.target));
 
-    // Panel minimize
-    $$('.btn-minimize').forEach(btn => {
-        btn.addEventListener('click', e => { e.stopPropagation(); togglePanel(btn.dataset.panel); });
-    });
-    $$('.panel-header').forEach(h => {
-        h.addEventListener('click', e => {
-            const panel = h.parentElement;
-            if (panel.classList.contains('collapsed') && !e.target.closest('button')) togglePanel(panel.id);
-        });
-    });
+    on(safe$('#btn-send-main'), 'click', () => handleSendButton('main'));
+    on(safe$('#input-main'), 'keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI('main'); }});
+    on(safe$('#input-main'), 'input', () => { const el = safe$('#input-main'); if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }});
 
-    // Chat Main
-    $('#btn-send-main').addEventListener('click', () => sendToAI('main'));
-    $('#input-main').addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI('main'); }
-    });
-    $('#input-main').addEventListener('input', () => {
-        const el = $('#input-main');
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-    });
+    on(safe$('#btn-send-explainer'), 'click', () => handleSendButton('explainer'));
+    on(safe$('#input-explainer'), 'keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI('explainer'); }});
+    on(safe$('#input-explainer'), 'input', () => { const el = safe$('#input-explainer'); if (el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }});
 
-    // Chat Explainer
-    $('#btn-send-explainer').addEventListener('click', () => sendToAI('explainer'));
-    $('#input-explainer').addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendToAI('explainer'); }
+    on(document, 'mouseup', maybeShowDocumentSelectionPopover);
+    on(safe$('#read-mode'), 'scroll', hideSelectionPopover);
+    on(document, 'mousedown', e => {
+        const pop = safe$('#selection-popover');
+        if (pop && !pop.contains(e.target) && e.target !== safe$('#btn-explain-selection')) hideSelectionPopover();
     });
-    $('#input-explainer').addEventListener('input', () => {
-        const el = $('#input-explainer');
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-    });
+    on(document, 'scroll', hideSelectionPopover);
 
-    // Keyboard
-    document.addEventListener('keydown', e => {
+    // Keyboard shortcuts
+    on(document, 'keydown', e => {
         if (e.key === 'Escape') {
-            $('#context-menu').classList.add('hidden');
-            $('#explain-result').classList.add('hidden');
-            $('#settings-overlay').classList.add('hidden');
-            $('#selection-explain-btn').classList.remove('visible');
+            const er = safe$('#explain-result'); if (er) er.classList.add('hidden');
+            const so = safe$('#settings-overlay'); if (so) so.classList.add('hidden');
+            hideSelectionPopover();
+            collapseSidebar();
         }
-    });
-
-    // ── Trackpad Pinch-to-Zoom ──
-    // Deliberate re-render at real scale instead of CSS transform.
-    // This keeps text layer coordinates perfectly aligned with the visual canvas.
-    let pinchAccumulator = 0;
-    document.addEventListener('wheel', (e) => {
-        if (e.ctrlKey) {
+        // Cmd+E or Ctrl+E = Explain selection
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e') {
             e.preventDefault();
-            const pdfPanel = $('#panel-pdf');
-            const rect = pdfPanel.getBoundingClientRect();
-            const mouseInPDF = (
-                e.clientX >= rect.left && e.clientX <= rect.right &&
-                e.clientY >= rect.top && e.clientY <= rect.bottom
-            );
-            if (!mouseInPDF || !state.pdfDoc || state.pdfMode !== 'pdf') return;
-
-            // Accumulate scale changes during continuous gesture
-            pinchAccumulator += -e.deltaY * 0.005;
-            const newScale = Math.max(0.5, Math.min(4.0, state.pdfScale * (1 + pinchAccumulator)));
-            pinchAccumulator = 0;
-            state.pdfScale = Math.round(newScale * 100) / 100;
-            updateZoomLabel();
-
-            // Debounce re-render — 200ms after last pinch event
-            clearTimeout(state.pinchTimer);
-            state.pinchTimer = setTimeout(() => {
-                if (state.pdfDoc && state.pdfMode === 'pdf') {
-                    renderPDFView();
-                }
-            }, 200);
+            explainPDFSelection({ preferClipboard: true });
         }
-    }, { passive: false });
-
-    // Safari gesture events
-    let gestureStartScale = 1;
-    document.addEventListener('gesturestart', (e) => {
-        e.preventDefault();
-        gestureStartScale = state.pdfScale;
-    });
-    document.addEventListener('gesturechange', (e) => {
-        e.preventDefault();
-        if (state.pdfDoc && state.pdfMode === 'pdf') {
-            state.pdfScale = Math.max(0.5, Math.min(4.0, gestureStartScale * e.scale));
-            state.pdfScale = Math.round(state.pdfScale * 100) / 100;
-            updateZoomLabel();
-        }
-    });
-    document.addEventListener('gestureend', (e) => {
-        e.preventDefault();
-        if (state.pdfDoc && state.pdfMode === 'pdf') {
-            renderPDFView();
-        }
-    });
+    }, true);
 }
 
-// ═══════════════════════════════════════════════════════
-// TOAST
-// ═══════════════════════════════════════════════════════
+// ═══════════ HELPERS ═══════════
+function escHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function tokenize(text) {
+    const tokens = []; const re = /([a-zA-Z0-9\u00C0-\u024F\-']+)|([^a-zA-Z0-9\u00C0-\u024F\-']+)/g; let m;
+    while ((m = re.exec(text)) !== null) tokens.push(m[1] ? { type: 'word', value: m[1] } : { type: 'punct', value: m[2] });
+    return tokens;
+}
 function showToast(msg, type = 'success') {
-    const t = document.createElement('div');
-    t.className = `toast ${type}`;
-    t.textContent = msg;
-    document.body.appendChild(t);
-    setTimeout(() => t.remove(), 3500);
+    const t = document.createElement('div'); t.className = `toast ${type}`; t.textContent = msg;
+    document.body.appendChild(t); setTimeout(() => t.remove(), 3500);
 }

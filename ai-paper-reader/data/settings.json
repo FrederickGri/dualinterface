@@ -1,10 +1,12 @@
 {
-  "api_key": "sk-98c4a8f49fe74613adde83d874431c24",
-  "model": "deepseek-reasoner",
+  "api_key": "sk-dyslmyykrldzgcfinstegcdoyuddoazhexstwlcfvtlpxmdk",
+  "provider": "siliconflow",
+  "api_base_url": "https://api.siliconflow.cn/v1",
+  "main_model": "deepseek-ai/DeepSeek-V4-Pro",
+  "explainer_model": "deepseek-ai/DeepSeek-V4-Pro",
   "layout": "horizontal",
-  "active_conversation_id": "9017a2d07be8",
   "sync_mode": "latest_only",
   "active_project_id": "e2e7af6c5ed8",
-  "main_model": "deepseek-reasoner",
-  "explainer_model": "deepseek-chat"
+  "model": "deepseek-reasoner",
+  "active_conversation_id": "9017a2d07be8"
 }

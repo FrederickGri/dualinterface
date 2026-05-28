@@ -26,6 +26,49 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 PROJECTS_INDEX = DATA_DIR / "projects_index.json"
 WORD_CARDS_FILE = DATA_DIR / "word_cards.json"
 
+# Optional local default key for SiliconFlow. Leave blank if you want to enter
+# the key in Settings instead.
+builtinapikey = ""
+
+PROVIDER_PRESETS = {
+    "siliconflow": {
+        "name": "SiliconFlow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "main_model": "deepseek-ai/DeepSeek-V4-Pro",
+        "explainer_model": "deepseek-ai/DeepSeek-V4-Pro",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "main_model": "deepseek-chat",
+        "explainer_model": "deepseek-chat",
+    },
+    "qwen": {
+        "name": "Qwen / DashScope",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "main_model": "qwen-plus",
+        "explainer_model": "qwen-turbo",
+    },
+    "volcengine": {
+        "name": "Volcengine Ark",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "main_model": "",
+        "explainer_model": "",
+    },
+    "openai": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "main_model": "gpt-4o-mini",
+        "explainer_model": "gpt-4o-mini",
+    },
+    "custom": {
+        "name": "Custom OpenAI-compatible",
+        "base_url": "",
+        "main_model": "",
+        "explainer_model": "",
+    },
+}
+
 app = FastAPI(title="AI Paper Reader", version="3.0.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -34,6 +77,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 class ChatRequest(BaseModel):
     message: str
     project_id: Optional[str] = None
+    regenerate: bool = False
 
 
 class ExplainWordRequest(BaseModel):
@@ -46,8 +90,10 @@ class ExplainWordRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     api_key: Optional[str] = None
-    main_model: Optional[str] = "deepseek-chat"
-    explainer_model: Optional[str] = "deepseek-chat"
+    provider: Optional[str] = "siliconflow"
+    api_base_url: Optional[str] = None
+    main_model: Optional[str] = "deepseek-ai/DeepSeek-V4-Pro"
+    explainer_model: Optional[str] = "deepseek-ai/DeepSeek-V4-Pro"
     layout: Optional[str] = "horizontal"
     sync_mode: Optional[str] = "latest_only"
     active_project_id: Optional[str] = None
@@ -68,20 +114,77 @@ def save_json(fp: Path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def default_settings():
+    preset = PROVIDER_PRESETS["siliconflow"]
+    return {
+        "api_key": "",
+        "provider": "siliconflow",
+        "api_base_url": preset["base_url"],
+        "main_model": preset["main_model"],
+        "explainer_model": preset["explainer_model"],
+        "layout": "horizontal",
+        "sync_mode": "latest_only",
+        "active_project_id": "",
+    }
+
+
 def get_settings():
-    return load_json(SETTINGS_FILE, {
-        "api_key": "", "main_model": "deepseek-chat",
-        "explainer_model": "deepseek-chat", "layout": "horizontal",
-        "sync_mode": "latest_only", "active_project_id": ""
-    })
+    raw = load_json(SETTINGS_FILE, {})
+    if not raw:
+        return default_settings()
+
+    settings = default_settings()
+    settings.update(raw)
+
+    is_legacy_settings = "provider" not in raw
+    if is_legacy_settings:
+        preset = PROVIDER_PRESETS["siliconflow"]
+        settings["provider"] = "siliconflow"
+        settings["api_key"] = ""
+        settings["api_base_url"] = preset["base_url"]
+        settings["main_model"] = preset["main_model"]
+        settings["explainer_model"] = preset["explainer_model"]
+
+    provider = settings.get("provider") if settings.get("provider") in PROVIDER_PRESETS else "custom"
+    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
+    settings["provider"] = provider
+    if is_legacy_settings or not raw.get("api_base_url"):
+        settings["api_base_url"] = preset["base_url"]
+
+    if is_legacy_settings and provider == "siliconflow":
+        settings["main_model"] = preset["main_model"]
+        settings["explainer_model"] = preset["explainer_model"]
+
+    return settings
+
+
+def effective_api_key(settings: dict) -> str:
+    if settings.get("api_key"):
+        return settings["api_key"]
+    if settings.get("provider") == "siliconflow":
+        return builtinapikey
+    return ""
 
 
 def get_client(model: str = "deepseek-chat"):
     settings = get_settings()
-    api_key = settings.get("api_key", "")
+    api_key = effective_api_key(settings)
+    base_url = settings.get("api_base_url") or PROVIDER_PRESETS.get(settings.get("provider"), {}).get("base_url")
     if not api_key:
-        raise HTTPException(400, "API key not set.")
-    return OpenAI(api_key=api_key, base_url="https://api.deepseek.com"), model
+        provider_name = PROVIDER_PRESETS.get(settings.get("provider"), {}).get("name", "provider")
+        raise HTTPException(400, f"{provider_name} API key not set.")
+    if not base_url:
+        raise HTTPException(400, "API base URL not set.")
+    return OpenAI(api_key=api_key, base_url=base_url), model
+
+
+def stream_token(chunk) -> str:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return ""
+
+    delta = getattr(choices[0], "delta", None)
+    return getattr(delta, "content", None) or ""
 
 
 def extract_pdf_text(filepath: Path) -> str:
@@ -204,9 +307,11 @@ async def status():
     s = get_settings()
     return {
         "running": True,
-        "api_key_set": bool(s.get("api_key")),
-        "main_model": s.get("main_model", "deepseek-chat"),
-        "explainer_model": s.get("explainer_model", "deepseek-chat"),
+        "api_key_set": bool(effective_api_key(s)),
+        "provider": s.get("provider", "siliconflow"),
+        "api_base_url": s.get("api_base_url", ""),
+        "main_model": s.get("main_model", "deepseek-ai/DeepSeek-V4-Pro"),
+        "explainer_model": s.get("explainer_model", "deepseek-ai/DeepSeek-V4-Pro"),
         "layout": s.get("layout", "horizontal"),
         "sync_mode": s.get("sync_mode", "latest_only"),
         "active_project_id": s.get("active_project_id", ""),
@@ -222,13 +327,15 @@ async def get_settings_route():
 async def update_settings(u: SettingsUpdate):
     s = get_settings()
     if u.api_key is not None: s["api_key"] = u.api_key
+    if u.provider is not None and u.provider in PROVIDER_PRESETS: s["provider"] = u.provider
+    if u.api_base_url is not None: s["api_base_url"] = u.api_base_url
     if u.main_model is not None: s["main_model"] = u.main_model
     if u.explainer_model is not None: s["explainer_model"] = u.explainer_model
     if u.layout is not None: s["layout"] = u.layout
     if u.sync_mode is not None: s["sync_mode"] = u.sync_mode
     if u.active_project_id is not None: s["active_project_id"] = u.active_project_id
     save_json(SETTINGS_FILE, s)
-    return {"status": "ok", "api_key_set": bool(s.get("api_key"))}
+    return {"status": "ok", "api_key_set": bool(effective_api_key(s))}
 
 
 # ─── PDF Upload ───────────────────────────────────────────
@@ -357,17 +464,53 @@ async def delete_project(project_id: str):
     return {"status": "ok"}
 
 
+@app.delete("/api/projects/{project_id}/chat/{window_type}/{message_index}")
+async def delete_chat_message(project_id: str, window_type: str, message_index: int):
+    if window_type not in ("main", "explainer"):
+        raise HTTPException(400, "Unknown chat window.")
+
+    project = load_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    history = project.get(window_type, [])
+    if message_index < 0 or message_index >= len(history):
+        raise HTTPException(404, "Message not found")
+
+    deleted = history.pop(message_index)
+    project[window_type] = history
+    save_project(project_id, project)
+    return {"status": "ok", "deleted": deleted}
+
+
 # ─── Streaming Chat ───────────────────────────────────────
 @app.post("/api/chat/main/stream")
 async def chat_main_stream(req: ChatRequest):
     s = get_settings()
-    model = s.get("main_model", "deepseek-chat")
+    model = s.get("main_model", "deepseek-ai/DeepSeek-V4-Pro")
     client, _ = get_client(model)
     sync_mode = s.get("sync_mode", "latest_only")
 
     pid = req.project_id or s.get("active_project_id", "")
     project = load_project(pid) if pid else None
     pdf_text = project.get("pdf_context", "") if project else ""
+    history = project.get("main", []) if project else []
+    history_for_prompt = history
+    message = req.message
+    append_user = True
+
+    if req.regenerate:
+        if not project:
+            raise HTTPException(400, "No active project to regenerate.")
+        if history and history[-1].get("role") == "assistant":
+            history = history[:-1]
+            project["main"] = history
+        last_user_index = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
+        if last_user_index is None:
+            raise HTTPException(400, "No user message to regenerate from.")
+        message = history[last_user_index].get("content", "")
+        history_for_prompt = history[:last_user_index]
+        append_user = False
 
     system = """You are a knowledgeable AI research assistant. Discuss the document thoroughly.
 Answer questions, provide analysis, cite sections. Be natural and engaging.
@@ -385,10 +528,10 @@ If no document is loaded, have a normal helpful conversation."""
             messages.append({"role": "system", "content": f"Explainer discussion:\n{ctx}"})
 
     # History
-    for turn in (project.get("main", []) if project else [])[-12:]:
+    for turn in history_for_prompt[-12:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
 
-    messages.append({"role": "user", "content": req.message})
+    messages.append({"role": "user", "content": message})
 
     try:
         stream = client.chat.completions.create(
@@ -398,16 +541,21 @@ If no document is loaded, have a normal helpful conversation."""
 
         def gen():
             full = ""
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    t = chunk.choices[0].delta.content
+            try:
+                for chunk in stream:
+                    t = stream_token(chunk)
+                    if not t:
+                        continue
                     full += t
                     yield f"data: {json.dumps({'token': t})}\n\n"
-            if project:
-                project["main"].append({"role": "user", "content": req.message})
-                project["main"].append({"role": "assistant", "content": full})
-                save_project(pid, project)
-            yield f"data: {json.dumps({'done': True})}\n\n"
+                if project and full.strip():
+                    if append_user:
+                        project["main"].append({"role": "user", "content": message})
+                    project["main"].append({"role": "assistant", "content": full})
+                    save_project(pid, project)
+                yield f"data: {json.dumps({'done': True})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
     except Exception as e:
@@ -419,13 +567,30 @@ If no document is loaded, have a normal helpful conversation."""
 @app.post("/api/chat/explainer/stream")
 async def chat_explainer_stream(req: ChatRequest):
     s = get_settings()
-    model = s.get("explainer_model", "deepseek-chat")
+    model = s.get("explainer_model", "deepseek-ai/DeepSeek-V4-Pro")
     client, _ = get_client(model)
     sync_mode = s.get("sync_mode", "latest_only")
 
     pid = req.project_id or s.get("active_project_id", "")
     project = load_project(pid) if pid else None
     pdf_text = project.get("pdf_context", "") if project else ""
+    history = project.get("explainer", []) if project else []
+    history_for_prompt = history
+    message = req.message
+    append_user = True
+
+    if req.regenerate:
+        if not project:
+            raise HTTPException(400, "No active project to regenerate.")
+        if history and history[-1].get("role") == "assistant":
+            history = history[:-1]
+            project["explainer"] = history
+        last_user_index = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
+        if last_user_index is None:
+            raise HTTPException(400, "No user message to regenerate from.")
+        message = history[last_user_index].get("content", "")
+        history_for_prompt = history[:last_user_index]
+        append_user = False
 
     system = """You are a concise explainer. Keep responses SHORT — 2-4 sentences max unless told to say more.
 Rules:
@@ -452,10 +617,10 @@ Rules:
             messages.append({"role": "system", "content": f"Full Main AI conversation:\n{ctx}"})
 
     # History
-    for turn in (project.get("explainer", []) if project else [])[-8:]:
+    for turn in history_for_prompt[-8:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
 
-    messages.append({"role": "user", "content": req.message})
+    messages.append({"role": "user", "content": message})
 
     try:
         stream = client.chat.completions.create(
@@ -465,16 +630,21 @@ Rules:
 
         def gen():
             full = ""
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    t = chunk.choices[0].delta.content
+            try:
+                for chunk in stream:
+                    t = stream_token(chunk)
+                    if not t:
+                        continue
                     full += t
                     yield f"data: {json.dumps({'token': t})}\n\n"
-            if project:
-                project["explainer"].append({"role": "user", "content": req.message})
-                project["explainer"].append({"role": "assistant", "content": full})
-                save_project(pid, project)
-            yield f"data: {json.dumps({'done': True})}\n\n"
+                if project and full.strip():
+                    if append_user:
+                        project["explainer"].append({"role": "user", "content": message})
+                    project["explainer"].append({"role": "assistant", "content": full})
+                    save_project(pid, project)
+                yield f"data: {json.dumps({'done': True})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
     except Exception as e:
@@ -487,7 +657,7 @@ Rules:
 @app.post("/api/explain-word")
 async def explain_word(req: ExplainWordRequest):
     s = get_settings()
-    model = s.get("explainer_model", "deepseek-chat")
+    model = s.get("explainer_model", "deepseek-ai/DeepSeek-V4-Pro")
     client, _ = get_client(model)
 
     prompt = f"""Explain this word in context.
@@ -542,6 +712,10 @@ async def serve_pdf(filename: str):
 
 # ─── Startup ───────────────────────────────────────────────
 if __name__ == "__main__":
-    import uvicorn, webbrowser
-    webbrowser.open("http://localhost:8000/static/index.html")
+    import threading
+    import uvicorn
+    import webbrowser
+
+    url = "http://127.0.0.1:8000/static/index.html"
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host="127.0.0.1", port=8000)
